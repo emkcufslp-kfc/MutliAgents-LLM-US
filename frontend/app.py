@@ -3,6 +3,8 @@ import sys
 import os
 import pandas as pd
 from datetime import date
+import ast
+import re
 
 # Ensure the parent directory is in the system path so we can import our modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -98,8 +100,42 @@ if run_analysis:
                 metrics_col2.metric("Confidence", f"{final_state.get('confidence', 0)*100}%")
                 metrics_col3.metric("Risk Approval", final_state.get("risk_assessment", {}).get("approval", "APPROVED"))
                 
-                st.write("**Execution Plan:**")
-                st.code(final_state.get('trader_plan', {}).get('plan_details', final_state.get('trader_plan', {})))
+                st.divider()
+                st.markdown("#### 🎯 Execution Plan Details")
+                plan_str = final_state.get('trader_plan', {}).get('plan_details', "{}")
                 
-                st.write("**Portfolio Manager Reasoning:**")
-                st.info(final_state.get('pm_reasoning', 'No reasoning provided.'))
+                clean_str = re.sub(r'\(.*?\)', '', str(plan_str)).strip()
+                try:
+                    plan_dict = ast.literal_eval(clean_str)
+                    if isinstance(plan_dict, dict):
+                        ec1, ec2, ec3, ec4 = st.columns(4)
+                        ec1.metric("Action", plan_dict.get('action', 'N/A'))
+                        ec2.metric("Entry Zone", plan_dict.get('entry_zone', 'N/A'))
+                        ec3.metric("Stop Loss", plan_dict.get('stop_loss', 'N/A'))
+                        ec4.metric("Pos Size", plan_dict.get('position_size', 'N/A'))
+                    else:
+                        st.info(plan_str)
+                except:
+                    st.info(plan_str)
+                
+                st.markdown("#### 🧠 Portfolio Manager Reasoning")
+                pm_reason = str(final_state.get('pm_reasoning', 'No reasoning provided.'))
+                
+                # Extract fields if they exist using regex
+                pros_match = re.search(r'PROS:\s*(.*?)(?=CONS:|CONCERNS:|REASON:|$)', pm_reason, re.IGNORECASE | re.DOTALL)
+                cons_match = re.search(r'CONS:\s*(.*?)(?=CONCERNS:|REASON:|$)', pm_reason, re.IGNORECASE | re.DOTALL)
+                concerns_match = re.search(r'CONCERNS:\s*(.*?)(?=REASON:|$)', pm_reason, re.IGNORECASE | re.DOTALL)
+                reason_match = re.search(r'REASON:\s*(.*?)$', pm_reason, re.IGNORECASE | re.DOTALL)
+                
+                if pros_match and cons_match:
+                    rc1, rc2 = st.columns(2)
+                    with rc1:
+                        st.success(f"**👍 PROS:**\n{pros_match.group(1).strip()}")
+                    with rc2:
+                        st.error(f"**👎 CONS:**\n{cons_match.group(1).strip()}")
+                        
+                if concerns_match:
+                    st.warning(f"**⚠️ CONCERNS:** {concerns_match.group(1).strip()}")
+                    
+                final_thesis = reason_match.group(1).strip() if reason_match else pm_reason
+                st.info(f"**Detailed Thesis:**\n{final_thesis}")
