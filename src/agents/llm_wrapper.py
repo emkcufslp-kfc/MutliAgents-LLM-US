@@ -46,6 +46,12 @@ class LLMFactory:
         if provider == "ollama" and ChatOllama:
             # Requires Ollama running locally on port 11434
             return ChatOllama(model=model_name, temperature=0.1)
+        elif provider == "gemini" and ChatGoogleGenerativeAI:
+            api_key = os.environ.get("GOOGLE_API_KEY")
+            if not api_key:
+                logger.error("GOOGLE_API_KEY not found.")
+                return None
+            return ChatGoogleGenerativeAI(model=model_name, temperature=0.1, convert_system_message_to_human=True)
         else:
             logger.warning(f"Tier 1 provider '{provider}' not available or package missing. Returning None.")
             return None
@@ -62,7 +68,7 @@ class LLMFactory:
             if not api_key:
                 logger.error("GOOGLE_API_KEY not found in environment variables.")
                 return None
-            return ChatGoogleGenerativeAI(model=model_name, temperature=0.2)
+            return ChatGoogleGenerativeAI(model=model_name, temperature=0.2, convert_system_message_to_human=True)
         else:
             logger.warning(f"Tier 2 provider '{provider}' not available or package missing. Returning None.")
             return None

@@ -73,10 +73,17 @@ if run_analysis:
             with st.expander(f"Deep Dive Analysis: {ticker}", expanded=False):
                 st.write(f"Executing parallel agents for **{ticker}**...")
                 
+                # Extract metrics for this ticker from the screener results
+                ticker_metrics = {}
+                if not df_results.empty:
+                    row = df_results[df_results['Ticker'] == ticker]
+                    if not row.empty:
+                        ticker_metrics = row.iloc[0].to_dict()
+                
                 initial_state = {
                     "ticker": ticker,
                     "analysis_date": str(target_date),
-                    "market_metrics": {},
+                    "market_metrics": ticker_metrics,
                     "analyst_reports": {},
                     "debate_transcript": {},
                     "debate_round": 0,

@@ -9,8 +9,8 @@ data:
   fallback_lag_days: 45  # Days to lag fundamental data if exact filing date is unknown
 
 llm:
-  tier1_provider: "ollama"
-  tier1_model: "llama3"  # Fast, free local model for data extraction
+  tier1_provider: "gemini"
+  tier1_model: "gemini-2.5-flash"  # Fast, free local model for data extraction
   tier2_provider: "gemini" 
   tier2_model: "gemini-2.5-flash" # Premium model for Debate & Portfolio Manager
 

@@ -53,8 +53,17 @@ class HedgeFundGraph:
     def _node_technical_analyst(self, state: AgentState) -> Dict[str, Any]:
         """Tier 1 LLM: Evaluates momentum and structure."""
         logger.info(f"[{state['ticker']}] Running Technical Analyst...")
-        # Placeholder for LLM invocation
-        return {"analyst_reports": {"technical": "Price broke above 200DMA. Bullish trend."}}
+        if not self.tier1_llm:
+            return {"analyst_reports": {"technical": "Price broke above 200DMA. Bullish trend. (Simulated)"}}
+            
+        system_msg = SystemMessage(content="""You are a strict Hedge Fund Technical Analyst.
+        Analyze the exact metrics provided (Price, 50DMA, 200DMA, Volume).
+        You MUST NOT hallucinate. State the exact trend, distance from moving averages, and momentum.
+        Use Markdown formatting with bullet points.""")
+        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state.get('market_metrics', {})}")
+        
+        content = self._invoke_llm(self.tier1_llm, [system_msg, user_msg], "Price broke above 200DMA. Bullish trend. (Simulated Fallback)")
+        return {"analyst_reports": {"technical": content}}
         
     def _node_bull_researcher(self, state: AgentState) -> Dict[str, Any]:
         """Tier 2 LLM: Argues strictly for why the stock should be bought."""
@@ -63,9 +72,10 @@ class HedgeFundGraph:
         if not self.tier2_llm:
             return {"debate_transcript": {"bull": "Strong fundamentals and technical breakout make this a clear buy. (Simulated)"}}
             
-        system_msg = SystemMessage(content="""You are the Bull Researcher. Argue strictly for why this stock is a BUY based ONLY on the provided analyst reports. 
-        You MUST NOT hallucinate or guess. Beside a summary, you MUST show the exact reasons to support your case, citing specific data points from the reports. Explain the 'how' and 'what'.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nReports: {state.get('analyst_reports', {})}")
+        system_msg = SystemMessage(content="""You are the Bull Researcher. Argue strictly for why this stock is a BUY based ONLY on the provided analyst reports and raw market metrics. 
+        You MUST NOT hallucinate or guess. You MUST use Markdown formatting.
+        Beside a summary, you MUST provide an "Evidence" section with bullet points citing specific data points (e.g., exactly how much FCF, what is the ADV, what is the Golden Cross status) to support your case.""")
+        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state.get('market_metrics', {})}\nReports: {state.get('analyst_reports', {})}")
         
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], "Strong fundamentals and technical breakout make this a clear buy. (Simulated Fallback)")
         return {"debate_transcript": {"bull": content}}
@@ -77,9 +87,10 @@ class HedgeFundGraph:
         if not self.tier2_llm:
             return {"debate_transcript": {"bear": "Macro risks and potential overvaluation mean this should be avoided. (Simulated)"}}
             
-        system_msg = SystemMessage(content="""You are the Bear Researcher. Argue strictly for why this stock is a SELL/AVOID based ONLY on the provided analyst reports. 
-        You MUST NOT hallucinate or guess. Beside a summary, you MUST show the exact reasons to support your case, citing specific data points from the reports. Explain the 'how' and 'what'.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nReports: {state.get('analyst_reports', {})}")
+        system_msg = SystemMessage(content="""You are the Bear Researcher. Argue strictly for why this stock is a SELL/AVOID based ONLY on the provided analyst reports and raw market metrics. 
+        You MUST NOT hallucinate or guess. You MUST use Markdown formatting.
+        Beside a summary, you MUST provide an "Evidence" section with bullet points citing specific data points (e.g., negative momentum, relative weakness) to support your case.""")
+        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state.get('market_metrics', {})}\nReports: {state.get('analyst_reports', {})}")
         
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], "Macro risks and potential overvaluation mean this should be avoided. (Simulated Fallback)")
         return {"debate_transcript": {"bear": content}}
