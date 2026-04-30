@@ -5,6 +5,7 @@ from typing import Dict, Any
 from pathlib import Path
 from datetime import timedelta
 
+from . import alpha_vantage_loader
 from .point_in_time import PointInTimeContext
 
 logger = logging.getLogger(__name__)
@@ -45,10 +46,20 @@ class FundamentalLoader:
             cash_flow = ticker_obj.cashflow
         except YFRateLimitError:
             logger.warning(f"Yahoo Finance rate-limited fundamentals for {ticker}.")
+            if alpha_vantage_loader.has_api_key():
+                try:
+                    return alpha_vantage_loader.fetch_fundamentals(ticker, pit_context, self.fallback_lag_days)
+                except Exception as exc:
+                    logger.error(f"Alpha Vantage fundamentals fallback failed for {ticker}: {exc}")
             return {"error": "Yahoo Finance rate limit exceeded"}
             
         except Exception as e:
             logger.error(f"Failed to fetch fundamentals for {ticker}: {e}")
+            if alpha_vantage_loader.has_api_key():
+                try:
+                    return alpha_vantage_loader.fetch_fundamentals(ticker, pit_context, self.fallback_lag_days)
+                except Exception as exc:
+                    logger.error(f"Alpha Vantage fundamentals fallback failed for {ticker}: {exc}")
             return {"error": str(e)}
 
         if income_stmt.empty or cash_flow.empty:
