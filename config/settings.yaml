@@ -1,0 +1,22 @@
+system:
+  version: "1.1"
+  environment: "development"
+
+data:
+  cache_dir: "../data/cache"
+  raw_dir: "../data/raw"
+  processed_dir: "../data/processed"
+  fallback_lag_days: 45  # Days to lag fundamental data if exact filing date is unknown
+
+llm:
+  tier1_provider: "ollama"
+  tier1_model: "llama3"  # Fast, free local model for data extraction
+  tier2_provider: "gemini" 
+  tier2_model: "gemini-pro" # Premium model for Debate & Portfolio Manager
+
+debate:
+  max_debate_rounds: 2
+
+risk_limits:
+  max_portfolio_risk_per_trade: 0.05
+  max_sector_exposure: 0.20
