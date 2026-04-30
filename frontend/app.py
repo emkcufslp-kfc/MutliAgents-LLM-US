@@ -54,9 +54,9 @@ if run_analysis:
         survivors, df_results = screener.run_screen(universe, pit_context)
         
     st.markdown("#### 🎯 Institutional Rules Applied:")
-    st.markdown("- **Price Constraint:** Must be trading > $5.00")
-    st.markdown("- **Trend Filter:** Must be trading above the 200-Day Moving Average")
-    st.markdown("- **Quality Check:** Must generate Positive Free Cash Flow (FCF)")
+    st.markdown("- **Liquidity Constraint:** Minimum $10.00 Price & > 1M Shares ADV")
+    st.markdown("- **Trend Filter:** Price > 200-Day MA & Golden Cross (50DMA > 200DMA)")
+    st.markdown("- **Quality Check:** Positive Free Cash Flow (FCF) & Positive Net Income")
     
     st.dataframe(df_results, use_container_width=True, hide_index=True)
     
