@@ -1,4 +1,5 @@
 import ast
+import io
 import os
 import re
 import sys
@@ -27,6 +28,60 @@ def init_session_state() -> None:
         st.session_state.last_screen_results = None
     if "last_survivors" not in st.session_state:
         st.session_state.last_survivors = []
+    if "last_export_df" not in st.session_state:
+        st.session_state.last_export_df = None
+
+
+def build_export_filename(target_date: date) -> str:
+    return f"US-{target_date.strftime('%d-%b-%y')}.csv"
+
+
+def load_uploaded_tickers(uploaded_file) -> list[str]:
+    if uploaded_file is None:
+        return []
+
+    raw = uploaded_file.getvalue()
+    if not raw:
+        return []
+
+    df = pd.read_csv(io.BytesIO(raw))
+    if df.empty:
+        return []
+
+    candidate_columns = ["ticker", "symbol", "Ticker", "Symbol"]
+    selected_column = None
+    for column in candidate_columns:
+        if column in df.columns:
+            selected_column = column
+            break
+
+    if selected_column is None:
+        selected_column = df.columns[0]
+
+    tickers = []
+    for value in df[selected_column].dropna().astype(str):
+        normalized = value.strip().upper()
+        if normalized:
+            tickers.append(normalized)
+
+    return list(dict.fromkeys(tickers))
+
+
+def build_export_dataframe(
+    df_results: pd.DataFrame,
+    target_date: date,
+    selected_universe_size: int,
+    final_decisions: list[dict],
+) -> pd.DataFrame:
+    export_df = df_results.copy()
+    export_df.insert(0, "Run Date", target_date.strftime("%Y-%m-%d"))
+    export_df.insert(1, "Universe Size", selected_universe_size)
+
+    if final_decisions:
+        decisions_df = pd.DataFrame(final_decisions)
+        export_df = export_df.merge(decisions_df, how="left", on="Ticker")
+
+    return export_df
 
 
 def append_log(message: str) -> None:
@@ -210,6 +265,7 @@ def render_analysis_page() -> None:
 
     st.sidebar.header("Control Panel")
     target_date = st.sidebar.date_input("Analysis Date (Point-in-Time)", value=date(2024, 1, 15))
+    uploaded_universe = st.sidebar.file_uploader("Import Stock List (.csv)", type=["csv"])
     tickers_input = st.sidebar.text_input("Universe (Comma separated)", value="AAPL,NVDA,AMC,GME,PLTR")
     run_analysis = st.sidebar.button("Run AI Swarm")
 
@@ -218,10 +274,24 @@ def render_analysis_page() -> None:
     st.sidebar.caption("Planned workflow: uploaded 600-ticker universe → optional technical filter → user selection → AI swarm")
 
     if not run_analysis:
+        if st.session_state.last_export_df is not None:
+            st.sidebar.download_button(
+                "Export Last Result (.csv)",
+                data=st.session_state.last_export_df.to_csv(index=False).encode("utf-8"),
+                file_name=build_export_filename(target_date),
+                mime="text/csv",
+            )
         st.info("Use the left panel to run the current screening flow, or open Reference to review the system design and planned workflow.")
         return
 
-    universe = [ticker.strip().upper() for ticker in tickers_input.split(",") if ticker.strip()]
+    uploaded_tickers = load_uploaded_tickers(uploaded_universe)
+    if uploaded_tickers:
+        universe = uploaded_tickers
+        st.sidebar.success(f"Imported {len(uploaded_tickers)} tickers from CSV.")
+        append_log(f"Universe imported from CSV with {len(uploaded_tickers)} tickers.")
+    else:
+        universe = [ticker.strip().upper() for ticker in tickers_input.split(",") if ticker.strip()]
+
     append_log(f"Analysis started for {len(universe)} tickers as of {target_date}.")
 
     st.subheader("🌍 Step 1: Top-Down Macro Regime (Powered by FRED)")
@@ -247,6 +317,7 @@ def render_analysis_page() -> None:
 
     st.session_state.last_screen_results = df_results
     st.session_state.last_survivors = survivors
+    final_decisions = []
     append_log(f"Pre-screen complete: {len(survivors)} out of {len(universe)} tickers survived.")
 
     st.markdown("#### 🎯 Institutional Rules Applied")
@@ -260,6 +331,13 @@ def render_analysis_page() -> None:
     st.write(f"**Survivors Proceeding to AI Swarm:** {', '.join(survivors) if survivors else 'None'}")
 
     if not survivors:
+        st.session_state.last_export_df = build_export_dataframe(df_results, target_date, len(universe), final_decisions)
+        st.download_button(
+            "Export Screening Result (.csv)",
+            data=st.session_state.last_export_df.to_csv(index=False).encode("utf-8"),
+            file_name=build_export_filename(target_date),
+            mime="text/csv",
+        )
         st.warning("No names advanced to the AI swarm. In the planned workflow, this is where the optional technical filter and user selection stage will sit.")
         return
 
@@ -299,10 +377,26 @@ def render_analysis_page() -> None:
                 final_state = agent_graph.compiled_graph.invoke(initial_state)
 
             transcript = final_state.get("debate_transcript", {})
+            final_decisions.append(
+                {
+                    "Ticker": ticker,
+                    "Final Decision": final_state.get("final_decision", "UNKNOWN"),
+                    "Confidence": round(final_state.get("confidence", 0.0), 4),
+                    "Risk Approval": final_state.get("risk_assessment", {}).get("approval", "APPROVED"),
+                }
+            )
             append_log(
                 f"{ticker} decision complete: {final_state.get('final_decision', 'UNKNOWN')} at {final_state.get('confidence', 0) * 100:.0f}% confidence."
             )
             render_decision_view(final_state, transcript)
+
+    st.session_state.last_export_df = build_export_dataframe(df_results, target_date, len(universe), final_decisions)
+    st.download_button(
+        "Export Final Result (.csv)",
+        data=st.session_state.last_export_df.to_csv(index=False).encode("utf-8"),
+        file_name=build_export_filename(target_date),
+        mime="text/csv",
+    )
 
 
 def main() -> None:
