@@ -3,6 +3,8 @@ import pandas as pd
 import logging
 from pathlib import Path
 
+from . import alpha_vantage_loader
+
 # Assuming point_in_time is in the same directory
 from .point_in_time import PointInTimeContext
 
@@ -45,9 +47,27 @@ class PriceLoader:
                 df = ticker_obj.history(start=start_date, end=None)  # fetch up to today
             except YFRateLimitError:
                 logger.warning(f"Yahoo Finance rate-limited price history for {ticker}.")
+                if alpha_vantage_loader.has_api_key():
+                    try:
+                        df = alpha_vantage_loader.fetch_daily_prices(ticker, pit_context, start_date)
+                        if not df.empty:
+                            logger.info(f"Using Alpha Vantage fallback price data for {ticker}")
+                            df.to_parquet(cache_file)
+                            return df
+                    except Exception as exc:
+                        logger.error(f"Alpha Vantage fallback failed for {ticker}: {exc}")
                 return pd.DataFrame()
             except Exception as exc:
                 logger.error(f"Failed to fetch price history for {ticker}: {exc}")
+                if alpha_vantage_loader.has_api_key():
+                    try:
+                        df = alpha_vantage_loader.fetch_daily_prices(ticker, pit_context, start_date)
+                        if not df.empty:
+                            logger.info(f"Using Alpha Vantage fallback price data for {ticker}")
+                            df.to_parquet(cache_file)
+                            return df
+                    except Exception as av_exc:
+                        logger.error(f"Alpha Vantage fallback failed for {ticker}: {av_exc}")
                 return pd.DataFrame()
 
             if not df.empty:
