@@ -12,7 +12,7 @@ llm:
   tier1_provider: "ollama"
   tier1_model: "llama3"  # Fast, free local model for data extraction
   tier2_provider: "gemini" 
-  tier2_model: "gemini-pro" # Premium model for Debate & Portfolio Manager
+  tier2_model: "gemini-2.5-flash" # Premium model for Debate & Portfolio Manager
 
 debate:
   max_debate_rounds: 2
