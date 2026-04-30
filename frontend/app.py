@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.data.point_in_time import PointInTimeContext
 from src.data.price_loader import PriceLoader
 from src.data.fundamental_loader import FundamentalLoader
+from src.data.macro_loader import MacroLoader
 from src.screening.hard_screener import HardScreener
 from src.agents.graph import HedgeFundGraph
 
@@ -30,7 +31,19 @@ run_analysis = st.sidebar.button("Run AI Swarm")
 if run_analysis:
     universe = [t.strip().upper() for t in tickers_input.split(",")]
     
-    st.subheader(f"Step 1: Point-In-Time Pre-Screening (As of {target_date})")
+    st.subheader("🌍 Step 1: Top-Down Macro Regime (Powered by FRED)")
+    with st.spinner("Fetching Federal Reserve Economic Data..."):
+        macro_loader = MacroLoader()
+        macro_data = macro_loader.get_macro_regime()
+        
+    m_col1, m_col2, m_col3 = st.columns(3)
+    m_col1.metric("Current Regime", macro_data.get("regime", "N/A"))
+    m_col2.metric("YoY Inflation (CPI)", f"{macro_data.get('cpi', 'N/A')}%")
+    m_col3.metric("Unemployment Rate", f"{macro_data.get('unemployment', 'N/A')}%")
+    
+    st.divider()
+    
+    st.subheader(f"📊 Step 2: Point-In-Time Pre-Screening (As of {target_date})")
     
     with st.spinner("Fetching historical data and applying strict institutional rules..."):
         pit_context = PointInTimeContext(target_date)
@@ -44,7 +57,7 @@ if run_analysis:
     st.write(f"**Survivors:** {', '.join(survivors)}")
     
     if survivors:
-        st.subheader("Step 2: LangGraph Multi-Agent Orchestration")
+        st.subheader("🧠 Step 3: LangGraph Multi-Agent Orchestration")
         
         with st.spinner("Initializing AI Swarm..."):
             agent_graph = HedgeFundGraph()
