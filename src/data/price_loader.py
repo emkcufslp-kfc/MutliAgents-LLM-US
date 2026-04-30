@@ -1,7 +1,6 @@
 import yfinance as yf
 import pandas as pd
 import logging
-from typing import Optional
 from pathlib import Path
 
 # Assuming point_in_time is in the same directory
@@ -9,13 +8,20 @@ from .point_in_time import PointInTimeContext
 
 logger = logging.getLogger(__name__)
 
+try:
+    from yfinance.exceptions import YFRateLimitError
+except ImportError:
+    YFRateLimitError = Exception
+
 class PriceLoader:
     """
     Handles fetching and caching of price data, strictly enforcing
     the PointInTimeContext so that no future data leaks into the system.
     """
     
-    def __init__(self, cache_dir: str = "../data/cache"):
+    def __init__(self, cache_dir: str | Path | None = None):
+        if cache_dir is None:
+            cache_dir = Path(__file__).resolve().parents[2] / "data" / "cache"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -28,12 +34,22 @@ class PriceLoader:
         
         cache_file = self.cache_dir / f"{ticker}_daily_prices.parquet"
         
-        # In a production system, you'd check cache freshness. For now, we fetch fresh if missing.
+        # Prefer the checked-in cache when available so the app still works under
+        # Streamlit Cloud rate limits and only falls back to Yahoo when necessary.
         if cache_file.exists():
+            logger.info(f"Using cached price data for {ticker} from {cache_file}")
             df = pd.read_parquet(cache_file)
         else:
             ticker_obj = yf.Ticker(ticker)
-            df = ticker_obj.history(start=start_date, end=None)  # fetch up to today
+            try:
+                df = ticker_obj.history(start=start_date, end=None)  # fetch up to today
+            except YFRateLimitError:
+                logger.warning(f"Yahoo Finance rate-limited price history for {ticker}.")
+                return pd.DataFrame()
+            except Exception as exc:
+                logger.error(f"Failed to fetch price history for {ticker}: {exc}")
+                return pd.DataFrame()
+
             if not df.empty:
                 df.reset_index(inplace=True)
                 # Convert tz-aware datetime to tz-naive date for safe comparison
