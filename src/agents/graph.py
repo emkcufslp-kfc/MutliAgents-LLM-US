@@ -41,10 +41,10 @@ class HedgeFundGraph:
         if not self.tier1_llm:
             return {"analyst_reports": {"fundamental": "Strong FCF growth, but high debt. (Simulated)"}}
             
-        system_msg = SystemMessage(content=\"\"\"You are a strict, quantitative Hedge Fund Fundamental Analyst. 
+        system_msg = SystemMessage(content="""You are a strict, quantitative Hedge Fund Fundamental Analyst. 
         You MUST NOT hallucinate, simulate, or guess. 
         Analyze the exact metrics provided. If you say 'strong FCF growth', you MUST state exactly how strong (cite the numbers), compare it to the baseline, and explain the reason behind it.
-        Return a detailed, structured paragraph.\"\"\")
+        Return a detailed, structured paragraph.""")
         user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state['market_metrics']}")
         
         content = self._invoke_llm(self.tier1_llm, [system_msg, user_msg], "Strong FCF growth, but high debt. (Simulated Fallback)")
@@ -63,8 +63,8 @@ class HedgeFundGraph:
         if not self.tier2_llm:
             return {"debate_transcript": {"bull": "Strong fundamentals and technical breakout make this a clear buy. (Simulated)"}}
             
-        system_msg = SystemMessage(content=\"\"\"You are the Bull Researcher. Argue strictly for why this stock is a BUY based ONLY on the provided analyst reports. 
-        You MUST NOT hallucinate or guess. Beside a summary, you MUST show the exact reasons to support your case, citing specific data points from the reports. Explain the 'how' and 'what'.\"\"\")
+        system_msg = SystemMessage(content="""You are the Bull Researcher. Argue strictly for why this stock is a BUY based ONLY on the provided analyst reports. 
+        You MUST NOT hallucinate or guess. Beside a summary, you MUST show the exact reasons to support your case, citing specific data points from the reports. Explain the 'how' and 'what'.""")
         user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nReports: {state.get('analyst_reports', {})}")
         
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], "Strong fundamentals and technical breakout make this a clear buy. (Simulated Fallback)")
@@ -77,8 +77,8 @@ class HedgeFundGraph:
         if not self.tier2_llm:
             return {"debate_transcript": {"bear": "Macro risks and potential overvaluation mean this should be avoided. (Simulated)"}}
             
-        system_msg = SystemMessage(content=\"\"\"You are the Bear Researcher. Argue strictly for why this stock is a SELL/AVOID based ONLY on the provided analyst reports. 
-        You MUST NOT hallucinate or guess. Beside a summary, you MUST show the exact reasons to support your case, citing specific data points from the reports. Explain the 'how' and 'what'.\"\"\")
+        system_msg = SystemMessage(content="""You are the Bear Researcher. Argue strictly for why this stock is a SELL/AVOID based ONLY on the provided analyst reports. 
+        You MUST NOT hallucinate or guess. Beside a summary, you MUST show the exact reasons to support your case, citing specific data points from the reports. Explain the 'how' and 'what'.""")
         user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nReports: {state.get('analyst_reports', {})}")
         
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], "Macro risks and potential overvaluation mean this should be avoided. (Simulated Fallback)")
@@ -147,7 +147,7 @@ class HedgeFundGraph:
                 "audit_status": "PASS"
             }
             
-        system_msg = SystemMessage(content=\"\"\"You are the Portfolio Manager. Review the Analyst Reports and Debate Transcript. 
+        system_msg = SystemMessage(content="""You are the Portfolio Manager. Review the Analyst Reports and Debate Transcript. 
         You MUST NOT hallucinate. Weigh the pros and cons. 
         Reply strictly with a JSON-like structure: 
         FINAL_DECISION: [BUY/HOLD/SELL], 
@@ -155,7 +155,7 @@ class HedgeFundGraph:
         PROS: [List 2 key strengths], 
         CONS: [List 2 key weaknesses], 
         CONCERNS: [Primary risk factor], 
-        REASON: [Your detailed comparative thesis].\"\"\")
+        REASON: [Your detailed comparative thesis].""")
         user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nReports: {state.get('analyst_reports', {})}\nDebate: {state.get('debate_transcript', {})}")
         
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], "FINAL_DECISION: BUY, CONFIDENCE: 0.85, PROS: Strong FCF; Technical breakout, CONS: High valuation; Macro uncertainty, CONCERNS: Sector rotation risk, REASON: The fundamental cash flow outweighs the technical overextension. (Simulated Fallback)")
