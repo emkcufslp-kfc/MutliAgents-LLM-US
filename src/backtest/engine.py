@@ -38,7 +38,7 @@ class BacktestEngine:
             pit_context = PointInTimeContext(current_date)
             
             # 2. Hard Screener
-            survivors = self.screener.run_screen(universe, pit_context)
+            survivors, _ = self.screener.run_screen(universe, pit_context)
             
             if not survivors:
                 print("No stocks passed the screener for this period.")

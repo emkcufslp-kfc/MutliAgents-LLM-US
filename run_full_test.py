@@ -55,7 +55,7 @@ def main():
     from src.data.point_in_time import PointInTimeContext
     pit_context = PointInTimeContext(test_date)
     
-    survivors = engine.screener.run_screen(universe, pit_context)
+    survivors, _ = engine.screener.run_screen(universe, pit_context)
     
     for ticker in survivors:
         initial_state = {

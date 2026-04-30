@@ -1,6 +1,6 @@
 import logging
 import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from ..data.point_in_time import PointInTimeContext
 from ..data.price_loader import PriceLoader
@@ -80,12 +80,13 @@ class HardScreener:
             }
         }
 
-    def run_screen(self, universe: List[str], pit_context: PointInTimeContext) -> List[str]:
+    def run_screen(self, universe: List[str], pit_context: PointInTimeContext) -> Tuple[List[str], pd.DataFrame]:
         """
         Runs the full universe through the hard screener.
-        Returns the list of tickers that PASSED.
+        Returns a tuple: (List of passed tickers, DataFrame of full results).
         """
         passed_tickers = []
+        detailed_results = []
         
         print(f"\n--- Initiating Hard Screener as of {pit_context.analysis_date} ---")
         print(f"Scanning {len(universe)} tickers...")
@@ -95,8 +96,25 @@ class HardScreener:
             if result["passed"]:
                 print(f"[PASS] {ticker} (Price: ${result['metrics']['price']:.2f}, FCF: {result['metrics']['fcf']})")
                 passed_tickers.append(ticker)
+                detailed_results.append({
+                    "Ticker": ticker,
+                    "Status": "✅ PASS",
+                    "Reason": "Met all criteria",
+                    "Price": f"${result['metrics']['price']:.2f}",
+                    "200 DMA": f"${result['metrics']['dma_200']:.2f}",
+                    "FCF": result['metrics']['fcf']
+                })
             else:
                 print(f"[FAIL] {ticker}: {result['reason']}")
+                detailed_results.append({
+                    "Ticker": ticker,
+                    "Status": "❌ FAIL",
+                    "Reason": result['reason'],
+                    "Price": "N/A",
+                    "200 DMA": "N/A",
+                    "FCF": "N/A"
+                })
                 
         print(f"--- Screening Complete: {len(passed_tickers)} / {len(universe)} passed ---\n")
-        return passed_tickers
+        df_results = pd.DataFrame(detailed_results)
+        return passed_tickers, df_results

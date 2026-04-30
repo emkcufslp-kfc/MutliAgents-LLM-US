@@ -34,7 +34,7 @@ def main():
     ]
     
     # 5. Execute the screen
-    survivors = screener.run_screen(test_universe, pit_context)
+    survivors, _ = screener.run_screen(test_universe, pit_context)
     
     print("\n--- Phase 5: LangGraph AI Orchestrator ---")
     print(f"Passing {len(survivors)} surviving tickers to the AI swarm...\n")

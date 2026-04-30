@@ -51,10 +51,17 @@ if run_analysis:
         fundamental_loader = FundamentalLoader(fallback_lag_days=45)
         screener = HardScreener(price_loader, fundamental_loader)
         
-        survivors = screener.run_screen(universe, pit_context)
+        survivors, df_results = screener.run_screen(universe, pit_context)
         
+    st.markdown("#### 🎯 Institutional Rules Applied:")
+    st.markdown("- **Price Constraint:** Must be trading > $5.00")
+    st.markdown("- **Trend Filter:** Must be trading above the 200-Day Moving Average")
+    st.markdown("- **Quality Check:** Must generate Positive Free Cash Flow (FCF)")
+    
+    st.dataframe(df_results, use_container_width=True, hide_index=True)
+    
     st.success(f"Screening Complete: {len(survivors)} out of {len(universe)} passed the fundamental/technical gates.")
-    st.write(f"**Survivors:** {', '.join(survivors)}")
+    st.write(f"**Survivors Proceeding to AI Swarm:** {', '.join(survivors) if survivors else 'None'}")
     
     if survivors:
         st.subheader("🧠 Step 3: LangGraph Multi-Agent Orchestration")
