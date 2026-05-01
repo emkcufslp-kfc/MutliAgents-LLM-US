@@ -1490,7 +1490,14 @@ def render_analysis_page() -> None:
             pit_context = PointInTimeContext(effective_date)
             price_loader = PriceLoader()
             fundamental_loader = FundamentalLoader(fallback_lag_days=45)
-            screener = HardScreener(price_loader, fundamental_loader, screening_config)
+            try:
+                screener = HardScreener(price_loader, fundamental_loader, screening_config)
+            except TypeError as exc:
+                # Compatibility fallback for environments still loading an older
+                # HardScreener constructor that only accepts the two loader args.
+                append_log(f"HardScreener constructor fallback engaged: {exc}")
+                screener = HardScreener(price_loader, fundamental_loader)
+                setattr(screener, "screen_config", screening_config)
             survivors, df_results = screener.run_screen(universe, pit_context)
 
         st.session_state.screen_state = build_screen_state(
