@@ -96,6 +96,55 @@ class FundamentalLoader:
             logger.error(f"Alpha Vantage fundamentals fallback failed for {ticker}: {exc}")
             return {"error": str(exc)}
 
+    def _coerce_percent(self, value: Any) -> float | None:
+        numeric = pd.to_numeric(value, errors="coerce")
+        if pd.isna(numeric):
+            return None
+        return float(numeric) * 100.0
+
+    def _try_yahoo_summary_fallback(
+        self,
+        ticker: str,
+        ticker_obj: Any | None = None,
+    ) -> Dict[str, Any]:
+        if not self._yfinance_available():
+            return {"error": "Yahoo Finance cooldown is active"}
+
+        try:
+            tk = ticker_obj or yf.Ticker(ticker)
+            fast_info = getattr(tk, "fast_info", None)
+            market_cap = None
+            if fast_info is not None:
+                try:
+                    market_cap = fast_info.get("market_cap")
+                except Exception:
+                    market_cap = None
+
+            info = tk.get_info()
+            market_cap = market_cap if market_cap is not None else info.get("marketCap")
+            market_cap_b = None
+            if market_cap is not None and pd.notna(market_cap):
+                market_cap_b = float(market_cap) / 1_000_000_000.0
+
+            snapshot = {
+                "ticker": ticker,
+                "eps_ttm_yoy_pct": self._coerce_percent(info.get("earningsQuarterlyGrowth")),
+                "revenue_ttm_yoy_pct": self._coerce_percent(info.get("revenueGrowth")),
+                "roe_ttm_pct": self._coerce_percent(info.get("returnOnEquity")),
+                "roe_stability_std_pct": None,
+                "market_cap_b": market_cap_b,
+                "source": "yfinance_info",
+            }
+            if self._needs_enrichment(snapshot):
+                return {"error": f"Yahoo summary fields did not provide usable enrichment for {ticker}"}
+            return snapshot
+        except YFRateLimitError:
+            self._mark_yfinance_rate_limited(ticker)
+            return {"error": "Yahoo Finance rate limit exceeded"}
+        except Exception as exc:
+            logger.error(f"Yahoo summary fallback failed for {ticker}: {exc}")
+            return {"error": str(exc)}
+
     def _merge_snapshots(self, primary: Dict[str, Any], secondary: Dict[str, Any], merged_source: str) -> Dict[str, Any]:
         merged = dict(primary)
         for key, value in secondary.items():
@@ -314,14 +363,24 @@ class FundamentalLoader:
         current_price: float | None,
         cached_snapshot: Dict[str, Any] | None,
         sec_snapshot: Dict[str, Any] | None,
+        ticker_obj: Any | None = None,
     ) -> Dict[str, Any]:
         if cached_snapshot and "error" not in cached_snapshot:
+            yahoo_summary = self._try_yahoo_summary_fallback(ticker, ticker_obj)
+            if "error" not in yahoo_summary:
+                cached_snapshot = self._merge_snapshots(cached_snapshot, yahoo_summary, "cache+yfinance_info")
             if sec_snapshot and "error" not in sec_snapshot:
                 merged = self._merge_snapshots(cached_snapshot, sec_snapshot, "cache+sec")
                 if not self._needs_enrichment(merged):
                     return merged
                 cached_snapshot = merged
             return cached_snapshot
+
+        yahoo_summary = self._try_yahoo_summary_fallback(ticker, ticker_obj)
+        if "error" not in yahoo_summary:
+            if sec_snapshot and "error" not in sec_snapshot:
+                return self._merge_snapshots(sec_snapshot, yahoo_summary, "sec+yfinance_info")
+            return yahoo_summary
 
         alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
         if "error" not in alpha_snapshot:
@@ -378,6 +437,7 @@ class FundamentalLoader:
                 current_price,
                 cached_snapshot,
                 sec_snapshot,
+                None,
             )
 
         ticker_obj = yf.Ticker(ticker)
@@ -394,6 +454,7 @@ class FundamentalLoader:
                 current_price,
                 cached_snapshot,
                 sec_snapshot,
+                ticker_obj,
             )
         except Exception as exc:
             logger.error(f"Failed to fetch fundamentals for {ticker}: {exc}")
@@ -403,6 +464,7 @@ class FundamentalLoader:
                 current_price,
                 cached_snapshot,
                 sec_snapshot,
+                ticker_obj,
             )
 
         if income_stmt.empty or cash_flow.empty:
@@ -412,11 +474,16 @@ class FundamentalLoader:
                 current_price,
                 cached_snapshot,
                 sec_snapshot,
+                ticker_obj,
             )
 
         inc_df, cf_df, bs_df = self._prepare_statement_frames(income_stmt, cash_flow, balance_sheet)
         self._save_cached_reports(ticker, inc_df, cf_df, bs_df)
         snapshot = self._build_snapshot(ticker, pit_context, inc_df, cf_df, bs_df, "yfinance", current_price)
+        if "error" not in snapshot and self._needs_enrichment(snapshot):
+            yahoo_summary = self._try_yahoo_summary_fallback(ticker, ticker_obj)
+            if "error" not in yahoo_summary:
+                snapshot = self._merge_snapshots(snapshot, yahoo_summary, "yfinance+yfinance_info")
         if "error" not in snapshot and sec_snapshot and "error" not in sec_snapshot and self._needs_enrichment(snapshot):
             return self._merge_snapshots(snapshot, sec_snapshot, "yfinance+sec")
         return snapshot
