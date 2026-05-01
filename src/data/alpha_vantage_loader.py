@@ -1,7 +1,6 @@
 import csv
 import json
 import logging
-import os
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
@@ -13,6 +12,7 @@ from urllib.request import urlopen
 import pandas as pd
 
 from .point_in_time import PointInTimeContext
+from ..runtime_config import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,11 @@ class AlphaVantageError(Exception):
 
 
 def has_api_key() -> bool:
-    return bool(os.environ.get("ALPHA_VANTAGE_API_KEY"))
+    return bool(get_secret("ALPHA_VANTAGE_API_KEY"))
 
 
 def _get_api_key() -> str:
-    api_key = os.environ.get("ALPHA_VANTAGE_API_KEY")
+    api_key = get_secret("ALPHA_VANTAGE_API_KEY")
     if not api_key:
         raise AlphaVantageError("ALPHA_VANTAGE_API_KEY is not configured")
     return api_key

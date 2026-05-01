@@ -1,9 +1,8 @@
-import os
 import logging
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
 
-load_dotenv()
+from ..runtime_config import get_secret
+
 logger = logging.getLogger(__name__)
 
 class MacroLoader:
@@ -12,16 +11,16 @@ class MacroLoader:
     Fetches core US macro indicators and calculates a Top-Down Regime Score.
     """
     def __init__(self):
-        self.api_key = os.environ.get("FRED_API_KEY")
+        self.api_key = get_secret("FRED_API_KEY")
         self.fred = None
         if self.api_key:
             try:
                 from fredapi import Fred
                 self.fred = Fred(api_key=self.api_key)
             except ImportError:
-                logger.warning("fredapi not installed. Run: pip install fredapi")
+                logger.warning("fredapi not installed. Add fredapi to the deployment dependencies.")
         else:
-            logger.warning("FRED_API_KEY not found in .env")
+            logger.warning("FRED_API_KEY not found in environment variables or Streamlit secrets")
             
     def get_macro_regime(self):
         """Fetches CPI and Unemployment to establish the market environment."""

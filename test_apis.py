@@ -17,23 +17,28 @@ def test_fred():
     except Exception as e:
         print(f"[FAIL] FRED API Failed: {e}")
 
-def test_gemini():
-    gemini_key = os.environ.get("GOOGLE_API_KEY")
-    if not gemini_key or gemini_key == "your_gemini_api_key_here":
-        print("[FAIL] GOOGLE_API_KEY is missing or unchanged.")
+def test_grok():
+    xai_key = os.environ.get("XAI_API_KEY")
+    if not xai_key or xai_key == "your_xai_api_key_here":
+        print("[FAIL] XAI_API_KEY is missing or unchanged.")
         return
         
     try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_openai import ChatOpenAI
         from langchain_core.messages import HumanMessage
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=gemini_key, convert_system_message_to_human=True)
+        llm = ChatOpenAI(
+            model="grok-3-mini",
+            api_key=xai_key,
+            base_url="https://api.x.ai/v1",
+            temperature=0.1,
+        )
         resp = llm.invoke([HumanMessage(content="Hello, respond with 'OK'")])
-        print(f"[SUCCESS] Google Gemini API connected successfully! (Response: {resp.content})")
+        print(f"[SUCCESS] xAI Grok API connected successfully! (Response: {resp.content})")
     except Exception as e:
-        print(f"[FAIL] Google Gemini API Failed: {e}")
+        print(f"[FAIL] xAI Grok API Failed: {e}")
 
 if __name__ == "__main__":
     print("\n--- Testing API Connections ---")
     test_fred()
-    test_gemini()
+    test_grok()
     print("-------------------------------\n")

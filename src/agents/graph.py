@@ -44,6 +44,13 @@ class HedgeFundGraph:
     def _risk_plan(self, state: AgentState) -> Dict[str, Any]:
         return state.get("risk_plan", {}) or {}
 
+    def _historical_guardrail(self, state: AgentState) -> str:
+        return (
+            f"Treat {state['analysis_date']} as the current date for this task. "
+            "Use only the provided metrics, reports, scorecard, and macro context. "
+            "Do not introduce facts, prices, earnings, macro releases, or events published after that date."
+        )
+
     def _deterministic_fundamental_report(self, state: AgentState) -> str:
         metrics = self._metrics(state)
         return (
@@ -126,8 +133,14 @@ class HedgeFundGraph:
 
         system_msg = SystemMessage(content="""You are a strict, quantitative Hedge Fund Fundamental Analyst.
         You must not hallucinate, simulate, or guess.
-        Analyze the exact metrics provided. State the figures, explain what they imply, and stay grounded in the data.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state['market_metrics']}")
+        Analyze the exact metrics provided. State the figures, explain what they imply, and stay grounded in the data.
+        Respect the supplied analysis date and do not use any future information.""")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Metrics: {state['market_metrics']}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         fallback = self._deterministic_fundamental_report(state)
         content = self._invoke_llm(self.tier1_llm, [system_msg, user_msg], fallback)
@@ -141,8 +154,14 @@ class HedgeFundGraph:
 
         system_msg = SystemMessage(content="""You are a strict Hedge Fund Technical Analyst.
         Analyze the exact metrics provided (price, moving averages, returns, volume, volatility).
-        You must not hallucinate. Use concise markdown bullet points.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state.get('market_metrics', {})}")
+        You must not hallucinate. Use concise markdown bullet points.
+        Respect the supplied analysis date and do not use any future information.""")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Metrics: {state.get('market_metrics', {})}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         fallback = self._deterministic_technical_report(state)
         content = self._invoke_llm(self.tier1_llm, [system_msg, user_msg], fallback)
@@ -155,8 +174,15 @@ class HedgeFundGraph:
             return {"debate_transcript": {"bull": self._deterministic_bull_case(state)}}
 
         system_msg = SystemMessage(content="""You are the Bull Researcher. Argue only from the provided analyst reports and exact market metrics.
-        Include an Evidence section with bullet points citing specific data.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state.get('market_metrics', {})}\nReports: {state.get('analyst_reports', {})}")
+        Include an Evidence section with bullet points citing specific data.
+        Respect the supplied analysis date and do not use any future information.""")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Metrics: {state.get('market_metrics', {})}\n"
+            f"Reports: {state.get('analyst_reports', {})}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         fallback = self._deterministic_bull_case(state)
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], fallback)
@@ -169,8 +195,15 @@ class HedgeFundGraph:
             return {"debate_transcript": {"bear": self._deterministic_bear_case(state)}}
 
         system_msg = SystemMessage(content="""You are the Bear Researcher. Argue only from the provided analyst reports and exact market metrics.
-        Include an Evidence section with bullet points citing specific data.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nMetrics: {state.get('market_metrics', {})}\nReports: {state.get('analyst_reports', {})}")
+        Include an Evidence section with bullet points citing specific data.
+        Respect the supplied analysis date and do not use any future information.""")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Metrics: {state.get('market_metrics', {})}\n"
+            f"Reports: {state.get('analyst_reports', {})}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         fallback = self._deterministic_bear_case(state)
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], fallback)
@@ -189,8 +222,15 @@ class HedgeFundGraph:
             return {"debate_transcript": {"research_manager_ruling": fallback}}
 
         system_msg = SystemMessage(content="""You are the Research Manager.
-        Score the setup out of 40 and explain the reasoning behind the score using the provided evidence only.""")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nDebate: {state.get('debate_transcript', {})}\nScorecard: {state.get('research_scorecard', {})}")
+        Score the setup out of 40 and explain the reasoning behind the score using the provided evidence only.
+        Respect the supplied analysis date and do not use any future information.""")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Debate: {state.get('debate_transcript', {})}\n"
+            f"Scorecard: {state.get('research_scorecard', {})}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], fallback)
         return {"debate_transcript": {"research_manager_ruling": content}}
@@ -207,8 +247,14 @@ class HedgeFundGraph:
         if not self.tier2_llm:
             return {"trader_plan": {"plan_details": fallback_plan}}
 
-        system_msg = SystemMessage(content="You are the Trader Agent. Provide action, entry logic, stop loss, and position size.")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nDebate: {state.get('debate_transcript', {})}\nExecution plan draft: {fallback_plan}")
+        system_msg = SystemMessage(content="You are the Trader Agent. Provide action, entry logic, stop loss, and position size. Respect the supplied analysis date and do not use any future information.")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Debate: {state.get('debate_transcript', {})}\n"
+            f"Execution plan draft: {fallback_plan}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], str(fallback_plan))
         return {"trader_plan": {"plan_details": content}}
@@ -220,8 +266,14 @@ class HedgeFundGraph:
         if not self.tier2_llm:
             return {"risk_assessment": fallback_risk}
 
-        system_msg = SystemMessage(content="You are the Risk Manager. Review the plan and respond with APPROVE, REDUCE SIZE, or VETO, with reasons.")
-        user_msg = HumanMessage(content=f"Ticker: {state['ticker']}\nTrader Plan: {state.get('trader_plan', {})}\nRisk draft: {fallback_risk}")
+        system_msg = SystemMessage(content="You are the Risk Manager. Review the plan and respond with APPROVE, REDUCE SIZE, or VETO, with reasons. Respect the supplied analysis date and do not use any future information.")
+        user_msg = HumanMessage(content=(
+            f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
+            f"Trader Plan: {state.get('trader_plan', {})}\n"
+            f"Risk draft: {fallback_risk}\n"
+            f"Rule: {self._historical_guardrail(state)}"
+        ))
 
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], fallback_risk.get("approval", "REVIEW"))
         approval = "APPROVED"
@@ -252,13 +304,16 @@ class HedgeFundGraph:
 
         system_msg = SystemMessage(content="""You are the Portfolio Manager.
         Review the analyst reports, debate transcript, research scorecard, and risk plan.
-        Reply with FINAL_DECISION, CONFIDENCE, PROS, CONS, CONCERNS, and REASON.""")
+        Reply with FINAL_DECISION, CONFIDENCE, PROS, CONS, CONCERNS, and REASON.
+        Respect the supplied analysis date and do not use any future information.""")
         user_msg = HumanMessage(content=(
             f"Ticker: {state['ticker']}\n"
+            f"Analysis date: {state['analysis_date']}\n"
             f"Reports: {state.get('analyst_reports', {})}\n"
             f"Debate: {state.get('debate_transcript', {})}\n"
             f"Scorecard: {state.get('research_scorecard', {})}\n"
-            f"Risk Plan: {state.get('risk_plan', {})}"
+            f"Risk Plan: {state.get('risk_plan', {})}\n"
+            f"Rule: {self._historical_guardrail(state)}"
         ))
 
         content = self._invoke_llm(self.tier2_llm, [system_msg, user_msg], fallback)

@@ -878,13 +878,30 @@ def render_survivor_picker(screen_state: dict) -> None:
     )
 
     survivor_df = get_display_dataframe(screen_state["df_results"])
-    survivor_df = survivor_df[survivor_df["Ticker"].isin(survivors)][["Ticker", "Price", "3M Return %", "Price vs 200DMA %", "FCF", "Net Income"]]
+    if "Ticker" not in survivor_df.columns:
+        st.warning("Qualified tickers were found, but the Step 2 summary table is missing ticker labels.")
+        return
+
+    survivor_df = survivor_df[survivor_df["Ticker"].isin(survivors)].copy()
+    summary_columns = ["Ticker", "Price", "3M Return %", "Price vs 200DMA %", "FCF", "Net Income"]
+    for column in summary_columns:
+        if column not in survivor_df.columns:
+            survivor_df[column] = "N/A"
+    survivor_df = survivor_df[summary_columns]
     st.dataframe(survivor_df, use_container_width=True, hide_index=True)
+    st.caption(
+        f"Hover a ticker button to see the Step 3 hint, then click to launch the multi-agent review using only data available as of {screen_state['effective_date']}."
+    )
 
     for start in range(0, len(survivors), 6):
         cols = st.columns(min(6, len(survivors) - start))
         for offset, ticker in enumerate(survivors[start:start + 6]):
-            if cols[offset].button(ticker, key=f"ticker_{ticker}", use_container_width=True):
+            if cols[offset].button(
+                ticker,
+                key=f"ticker_{ticker}",
+                use_container_width=True,
+                help=f"Run Step 3 multi-agent analysis for {ticker} using the historical point-in-time dataset as of {screen_state['effective_date']}.",
+            ):
                 st.session_state.selected_ticker = ticker
                 append_log(f"User selected {ticker} for Step 3 analysis.")
 
