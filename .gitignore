@@ -42,3 +42,9 @@ data/processed/
 .vscode/
 *.swp
 *.swo
+
+# Local runtime / workspace artifacts
+.deps/
+.codex_tmp/
+obsolete/
+*.log
