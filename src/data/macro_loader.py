@@ -26,7 +26,11 @@ class MacroLoader:
     def get_macro_regime(self):
         """Fetches CPI and Unemployment to establish the market environment."""
         if not self.fred:
-            return {"regime": "SIMULATED EXPANSION (No API Key)", "cpi": 3.2, "unemployment": 4.1}
+            return {
+                "regime": "Macro data unavailable (No FRED API key)",
+                "cpi": "N/A",
+                "unemployment": "N/A",
+            }
             
         try:
             # Fetch data (simplified for dashboard)
