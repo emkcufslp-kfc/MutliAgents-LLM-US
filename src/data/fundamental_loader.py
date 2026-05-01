@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
 
@@ -26,12 +26,23 @@ class FundamentalLoader:
     and prevent lookahead bias when exact filing dates are unknown.
     """
 
-    def __init__(self, fallback_lag_days: int = 45, cache_dir: str | Path | None = None):
+    CACHE_SCHEMA_VERSION = 2
+
+    def __init__(
+        self,
+        fallback_lag_days: int = 45,
+        cache_dir: str | Path | None = None,
+        prefer_sec_primary: bool = True,
+        yf_cooldown_seconds: int = 300,
+    ):
         self.fallback_lag_days = fallback_lag_days
+        self.prefer_sec_primary = prefer_sec_primary
         if cache_dir is None:
             cache_dir = Path(__file__).resolve().parents[2] / "data" / "cache"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.yf_cooldown_seconds = max(int(yf_cooldown_seconds), 0)
+        self._yf_cooldown_until: datetime | None = None
 
     def _cache_file(self, ticker: str) -> Path:
         return self.cache_dir / f"{ticker}_fundamentals.json"
@@ -46,6 +57,20 @@ class FundamentalLoader:
                 "roe_stability_std_pct",
                 "market_cap_b",
             ]
+        )
+
+    def _yfinance_available(self) -> bool:
+        return self._yf_cooldown_until is None or datetime.now(UTC) >= self._yf_cooldown_until
+
+    def _mark_yfinance_rate_limited(self, ticker: str) -> None:
+        if self.yf_cooldown_seconds <= 0:
+            return
+        self._yf_cooldown_until = datetime.now(UTC) + timedelta(seconds=self.yf_cooldown_seconds)
+        logger.warning(
+            "Yahoo Finance rate-limited fundamentals for %s. "
+            "Skipping further Yahoo fundamental requests until %s UTC.",
+            ticker,
+            self._yf_cooldown_until.replace(microsecond=0).isoformat(),
         )
 
     def _try_sec_fallback(
@@ -81,34 +106,45 @@ class FundamentalLoader:
         merged["source"] = merged_source
         return merged
 
-    def _save_cached_reports(self, ticker: str, income_df: pd.DataFrame, cash_flow_df: pd.DataFrame) -> None:
+    def _save_cached_reports(
+        self,
+        ticker: str,
+        income_df: pd.DataFrame,
+        cash_flow_df: pd.DataFrame,
+        balance_sheet_df: pd.DataFrame,
+    ) -> None:
         payload = {
+            "schema_version": self.CACHE_SCHEMA_VERSION,
             "income_reports": income_df.to_dict(orient="records"),
             "cash_flow_reports": cash_flow_df.to_dict(orient="records"),
+            "balance_sheet_reports": balance_sheet_df.to_dict(orient="records"),
         }
         try:
             self._cache_file(ticker).write_text(json.dumps(payload, default=str), encoding="utf-8")
         except Exception as exc:
             logger.warning(f"Failed to cache fundamentals for {ticker}: {exc}")
 
-    def _load_cached_reports(self, ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _load_cached_reports(self, ticker: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         cache_file = self._cache_file(ticker)
         if not cache_file.exists():
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         try:
             payload = json.loads(cache_file.read_text(encoding="utf-8"))
         except Exception as exc:
             logger.warning(f"Failed to read cached fundamentals for {ticker}: {exc}")
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
         inc_df = pd.DataFrame(payload.get("income_reports", []))
         cf_df = pd.DataFrame(payload.get("cash_flow_reports", []))
+        bs_df = pd.DataFrame(payload.get("balance_sheet_reports", []))
         if not inc_df.empty:
             inc_df["ReportDate"] = pd.to_datetime(inc_df["ReportDate"])
         if not cf_df.empty:
             cf_df["ReportDate"] = pd.to_datetime(cf_df["ReportDate"])
-        return inc_df, cf_df
+        if not bs_df.empty:
+            bs_df["ReportDate"] = pd.to_datetime(bs_df["ReportDate"])
+        return inc_df, cf_df, bs_df
 
     def _prepare_statement_frames(
         self,
@@ -271,6 +307,33 @@ class FundamentalLoader:
             **point_in_time_metrics,
         }
 
+    def _best_effort_fallback_snapshot(
+        self,
+        ticker: str,
+        pit_context: PointInTimeContext,
+        current_price: float | None,
+        cached_snapshot: Dict[str, Any] | None,
+        sec_snapshot: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        if cached_snapshot and "error" not in cached_snapshot:
+            if sec_snapshot and "error" not in sec_snapshot:
+                merged = self._merge_snapshots(cached_snapshot, sec_snapshot, "cache+sec")
+                if not self._needs_enrichment(merged):
+                    return merged
+                cached_snapshot = merged
+            return cached_snapshot
+
+        alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
+        if "error" not in alpha_snapshot:
+            if sec_snapshot and "error" not in sec_snapshot:
+                return self._merge_snapshots(alpha_snapshot, sec_snapshot, "alpha_vantage+sec")
+            return alpha_snapshot
+
+        if sec_snapshot and "error" not in sec_snapshot:
+            return sec_snapshot
+
+        return {"error": alpha_snapshot.get("error", "Missing fundamental data")}
+
     def fetch_fundamentals(self, ticker: str, pit_context: PointInTimeContext, current_price: float | None = None) -> Dict[str, Any]:
         """
         Fetches fundamental data and filters it based on the analysis_date.
@@ -279,15 +342,43 @@ class FundamentalLoader:
         """
         logger.info(f"Fetching fundamental data for {ticker} as of {pit_context.analysis_date}")
 
-        cached_inc, cached_cf = self._load_cached_reports(ticker)
+        cached_inc, cached_cf, cached_bs = self._load_cached_reports(ticker)
+        cached_snapshot: Dict[str, Any] | None = None
         if not cached_inc.empty and not cached_cf.empty:
-            snapshot = self._build_snapshot(ticker, pit_context, cached_inc, cached_cf, pd.DataFrame(), "cache", current_price)
-            if "error" not in snapshot:
-                if self._needs_enrichment(snapshot):
-                    sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-                    if "error" not in sec_snapshot:
-                        return self._merge_snapshots(snapshot, sec_snapshot, "cache+sec")
-                return snapshot
+            cached_snapshot = self._build_snapshot(
+                ticker,
+                pit_context,
+                cached_inc,
+                cached_cf,
+                cached_bs,
+                "cache",
+                current_price,
+            )
+
+        sec_snapshot: Dict[str, Any] | None = None
+        if self.prefer_sec_primary:
+            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+            if cached_snapshot and "error" not in cached_snapshot and "error" not in sec_snapshot:
+                merged = self._merge_snapshots(cached_snapshot, sec_snapshot, "cache+sec")
+                if not self._needs_enrichment(merged):
+                    return merged
+                cached_snapshot = merged
+            elif sec_snapshot and "error" not in sec_snapshot and not self._needs_enrichment(sec_snapshot):
+                return sec_snapshot
+            elif cached_snapshot and "error" not in cached_snapshot and not self._needs_enrichment(cached_snapshot):
+                return cached_snapshot
+        elif cached_snapshot and "error" not in cached_snapshot and not self._needs_enrichment(cached_snapshot):
+            return cached_snapshot
+
+        if not self._yfinance_available():
+            logger.info(f"Skipping Yahoo Finance fundamentals for {ticker} because cooldown is active.")
+            return self._best_effort_fallback_snapshot(
+                ticker,
+                pit_context,
+                current_price,
+                cached_snapshot,
+                sec_snapshot,
+            )
 
         ticker_obj = yf.Ticker(ticker)
 
@@ -296,54 +387,36 @@ class FundamentalLoader:
             cash_flow = ticker_obj.cashflow
             balance_sheet = ticker_obj.balance_sheet
         except YFRateLimitError:
-            logger.warning(f"Yahoo Finance rate-limited fundamentals for {ticker}.")
-            if not cached_inc.empty and not cached_cf.empty:
-                snapshot = self._build_snapshot(ticker, pit_context, cached_inc, cached_cf, pd.DataFrame(), "cache", current_price)
-                if "error" not in snapshot:
-                    if self._needs_enrichment(snapshot):
-                        sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-                        if "error" not in sec_snapshot:
-                            return self._merge_snapshots(snapshot, sec_snapshot, "cache+sec")
-                    return snapshot
-            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-            if "error" not in sec_snapshot:
-                return sec_snapshot
-            alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
-            if "error" not in alpha_snapshot:
-                return alpha_snapshot
-            return {"error": "Yahoo Finance rate limit exceeded"}
+            self._mark_yfinance_rate_limited(ticker)
+            return self._best_effort_fallback_snapshot(
+                ticker,
+                pit_context,
+                current_price,
+                cached_snapshot,
+                sec_snapshot,
+            )
         except Exception as exc:
             logger.error(f"Failed to fetch fundamentals for {ticker}: {exc}")
-            if not cached_inc.empty and not cached_cf.empty:
-                snapshot = self._build_snapshot(ticker, pit_context, cached_inc, cached_cf, pd.DataFrame(), "cache", current_price)
-                if "error" not in snapshot:
-                    if self._needs_enrichment(snapshot):
-                        sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-                        if "error" not in sec_snapshot:
-                            return self._merge_snapshots(snapshot, sec_snapshot, "cache+sec")
-                    return snapshot
-            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-            if "error" not in sec_snapshot:
-                return sec_snapshot
-            alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
-            if "error" not in alpha_snapshot:
-                return alpha_snapshot
-            return {"error": str(exc)}
+            return self._best_effort_fallback_snapshot(
+                ticker,
+                pit_context,
+                current_price,
+                cached_snapshot,
+                sec_snapshot,
+            )
 
         if income_stmt.empty or cash_flow.empty:
-            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-            if "error" not in sec_snapshot:
-                return sec_snapshot
-            alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
-            if "error" not in alpha_snapshot:
-                return alpha_snapshot
-            return {"error": "Missing fundamental data"}
+            return self._best_effort_fallback_snapshot(
+                ticker,
+                pit_context,
+                current_price,
+                cached_snapshot,
+                sec_snapshot,
+            )
 
         inc_df, cf_df, bs_df = self._prepare_statement_frames(income_stmt, cash_flow, balance_sheet)
-        self._save_cached_reports(ticker, inc_df, cf_df)
+        self._save_cached_reports(ticker, inc_df, cf_df, bs_df)
         snapshot = self._build_snapshot(ticker, pit_context, inc_df, cf_df, bs_df, "yfinance", current_price)
-        if "error" not in snapshot and self._needs_enrichment(snapshot):
-            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
-            if "error" not in sec_snapshot:
-                return self._merge_snapshots(snapshot, sec_snapshot, "yfinance+sec")
+        if "error" not in snapshot and sec_snapshot and "error" not in sec_snapshot and self._needs_enrichment(snapshot):
+            return self._merge_snapshots(snapshot, sec_snapshot, "yfinance+sec")
         return snapshot

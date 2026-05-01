@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -22,11 +23,13 @@ class PriceLoader:
     the PointInTimeContext so that no future data leaks into the system.
     """
     
-    def __init__(self, cache_dir: str | Path | None = None):
+    def __init__(self, cache_dir: str | Path | None = None, yf_cooldown_seconds: int = 300):
         if cache_dir is None:
             cache_dir = Path(__file__).resolve().parents[2] / "data" / "cache"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.yf_cooldown_seconds = max(int(yf_cooldown_seconds), 0)
+        self._yf_cooldown_until: datetime | None = None
 
     def _cache_file(self, ticker: str) -> Path:
         return self.cache_dir / f"{ticker}_daily_prices.parquet"
@@ -75,6 +78,20 @@ class PriceLoader:
         except Exception as exc:
             logger.warning(f"Failed to write cached price data for {ticker}: {exc}")
 
+    def _yfinance_available(self) -> bool:
+        return self._yf_cooldown_until is None or datetime.now(UTC) >= self._yf_cooldown_until
+
+    def _mark_yfinance_rate_limited(self, ticker_scope: str) -> None:
+        if self.yf_cooldown_seconds <= 0:
+            return
+        self._yf_cooldown_until = datetime.now(UTC) + timedelta(seconds=self.yf_cooldown_seconds)
+        logger.warning(
+            "Yahoo Finance rate-limited price history for %s. "
+            "Skipping further Yahoo price requests until %s UTC.",
+            ticker_scope,
+            self._yf_cooldown_until.replace(microsecond=0).isoformat(),
+        )
+
     def _download_single_ticker(self, ticker: str, start_date: str) -> pd.DataFrame:
         df = yf.download(
             ticker,
@@ -87,7 +104,13 @@ class PriceLoader:
             return pd.DataFrame()
         return self._prepare_dataframe(df)
 
-    def fetch_daily_prices(self, ticker: str, pit_context: PointInTimeContext, start_date: str = "2010-01-01") -> pd.DataFrame:
+    def fetch_daily_prices(
+        self,
+        ticker: str,
+        pit_context: PointInTimeContext,
+        start_date: str = "2010-01-01",
+        allow_yfinance: bool = True,
+    ) -> pd.DataFrame:
         """
         Fetches historical daily prices for a ticker and truncates any
         data that occurs after the pit_context analysis_date.
@@ -99,16 +122,20 @@ class PriceLoader:
             logger.info(f"Using cached price data for {ticker}")
             return cached_df
 
-        try:
-            df = self._download_single_ticker(ticker, start_date)
-            if not df.empty:
-                df.attrs["source"] = "yfinance"
-                self._save_cached_prices(ticker, df)
-                return self._filter_for_context(df, pit_context)
-        except YFRateLimitError:
-            logger.warning(f"Yahoo Finance rate-limited price history for {ticker}.")
-        except Exception as exc:
-            logger.error(f"Failed to fetch price history for {ticker}: {exc}")
+        can_use_yfinance = allow_yfinance and self._yfinance_available()
+        if can_use_yfinance:
+            try:
+                df = self._download_single_ticker(ticker, start_date)
+                if not df.empty:
+                    df.attrs["source"] = "yfinance"
+                    self._save_cached_prices(ticker, df)
+                    return self._filter_for_context(df, pit_context)
+            except YFRateLimitError:
+                self._mark_yfinance_rate_limited(ticker)
+            except Exception as exc:
+                logger.error(f"Failed to fetch price history for {ticker}: {exc}")
+        elif allow_yfinance:
+            logger.info(f"Skipping Yahoo Finance price fetch for {ticker} because cooldown is active.")
 
         if alpha_vantage_loader.has_api_key():
             try:
@@ -145,6 +172,17 @@ class PriceLoader:
             if not chunk:
                 continue
 
+            if not self._yfinance_available():
+                for ticker in chunk:
+                    results[ticker] = self.fetch_daily_prices(
+                        ticker,
+                        pit_context,
+                        start_date,
+                        allow_yfinance=False,
+                    )
+                continue
+
+            rate_limited = False
             try:
                 batch_df = yf.download(
                     chunk,
@@ -155,7 +193,8 @@ class PriceLoader:
                     group_by="ticker",
                 )
             except YFRateLimitError:
-                logger.warning(f"Yahoo Finance rate-limited batch price download for chunk: {chunk}")
+                rate_limited = True
+                self._mark_yfinance_rate_limited(",".join(chunk))
                 batch_df = pd.DataFrame()
             except Exception as exc:
                 logger.error(f"Failed batch price download for {chunk}: {exc}")
@@ -181,7 +220,12 @@ class PriceLoader:
                     results[ticker] = self._filter_for_context(prepared, pit_context)
                     continue
 
-                results[ticker] = self.fetch_daily_prices(ticker, pit_context, start_date)
+                results[ticker] = self.fetch_daily_prices(
+                    ticker,
+                    pit_context,
+                    start_date,
+                    allow_yfinance=not rate_limited,
+                )
 
         for ticker in tickers:
             results.setdefault(ticker, pd.DataFrame())
