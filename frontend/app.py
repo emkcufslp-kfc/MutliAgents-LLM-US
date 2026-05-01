@@ -1229,6 +1229,44 @@ def build_initial_state(ticker: str, analysis_date: date, metrics: dict, macro_d
     }
 
 
+def get_agent_setup_metadata(agent_graph) -> dict:
+    describe = getattr(agent_graph, "describe_agent_setup", None)
+    if callable(describe):
+        try:
+            return describe()
+        except Exception:
+            pass
+
+    return {
+        "fundamental_analyst": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "technical_analyst": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "bull_researcher": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "bear_researcher": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "research_manager": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "trader_agent": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "risk_manager": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "portfolio_manager": {"provider": "unknown", "model": "unknown", "runtime_mode": "unknown"},
+        "audit_manager": {"provider": "system", "model": "fallback", "runtime_mode": "deterministic-validation"},
+    }
+
+
+def get_analysis_protocol_metadata(agent_graph) -> dict:
+    describe = getattr(agent_graph, "describe_analysis_protocol", None)
+    if callable(describe):
+        try:
+            return describe()
+        except Exception:
+            pass
+
+    return {
+        "analysis_basis": "point-in-time-only",
+        "evidence_scope": ["market_metrics", "macro_context", "research_scorecard"],
+        "debate_style": "compatibility-fallback",
+        "max_debate_rounds": 0,
+        "independence_note": "Compatibility fallback metadata was used because the graph object does not expose protocol details.",
+    }
+
+
 def render_selected_analysis(screen_state: dict) -> list[dict]:
     survivors = screen_state["survivors"]
     ticker = st.session_state.selected_ticker
@@ -1259,8 +1297,8 @@ def render_selected_analysis(screen_state: dict) -> list[dict]:
 
         append_log(f"Running Step 3 analysis for {ticker}.")
         initial_state = build_initial_state(ticker, screen_state["effective_date"], metrics, screen_state["macro_data"])
-        initial_state["agent_models"] = st.session_state.agent_graph.describe_agent_setup()
-        initial_state["analysis_protocol"] = st.session_state.agent_graph.describe_analysis_protocol()
+        initial_state["agent_models"] = get_agent_setup_metadata(st.session_state.agent_graph)
+        initial_state["analysis_protocol"] = get_analysis_protocol_metadata(st.session_state.agent_graph)
         initial_state["audit_notes"] = [
             f"Historical guardrail active for analysis date {screen_state['effective_date']}.",
             "Bull and Bear researchers are independent nodes and may only use point-in-time inputs supplied by the app.",
