@@ -39,3 +39,5 @@ class AgentState(TypedDict):
     # Audit trail
     audit_status: str
     audit_notes: List[str]
+    agent_models: Dict[str, Any]
+    analysis_protocol: Dict[str, Any]

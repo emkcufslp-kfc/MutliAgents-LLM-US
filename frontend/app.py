@@ -436,6 +436,13 @@ def format_compact_currency(value) -> str:
     return f"${numeric:,.2f}"
 
 
+def format_confidence_pct(value) -> str:
+    numeric = try_float(value)
+    if numeric is None:
+        return "N/A"
+    return f"{numeric * 100:,.2f}%"
+
+
 def get_latest_us_trading_day(reference_date: date | None = None) -> date:
     if reference_date is None:
         reference_date = datetime.now(ZoneInfo("America/New_York")).date()
@@ -761,7 +768,7 @@ def get_display_dataframe(df_results: pd.DataFrame) -> pd.DataFrame:
             display_df[column] = display_df[column].apply(lambda value: format_number(value, prefix="$"))
     for column in volume_columns:
         if column in display_df.columns:
-            display_df[column] = display_df[column].apply(lambda value: format_number(value, decimals=0))
+            display_df[column] = display_df[column].apply(lambda value: format_number(value, decimals=2))
     for column in percent_columns:
         if column in display_df.columns:
             display_df[column] = display_df[column].apply(lambda value: format_number(value, suffix="%"))
@@ -786,6 +793,92 @@ def parse_trader_plan(plan_value) -> dict:
         pass
 
     return {"raw_plan": str(plan_value)}
+
+
+def get_agent_label(agent_models: dict, agent_key: str) -> str:
+    metadata = (agent_models or {}).get(agent_key, {})
+    model = metadata.get("model", "unknown")
+    provider = metadata.get("provider", "unknown")
+    runtime_mode = metadata.get("runtime_mode", "unknown")
+    return f"{provider} / {model} ({runtime_mode})"
+
+
+def render_agent_model_badge(agent_models: dict, agent_key: str) -> None:
+    st.caption(f"Model: {get_agent_label(agent_models, agent_key)}")
+
+
+def render_process_audit(final_state: dict) -> None:
+    analysis_protocol = final_state.get("analysis_protocol", {})
+    agent_models = final_state.get("agent_models", {})
+    max_rounds = analysis_protocol.get("max_debate_rounds", final_state.get("debate_round", 0))
+
+    st.markdown("#### Process Audit")
+    a1, a2, a3, a4, a5 = st.columns(5)
+    a1.metric("Analysis Date", str(final_state.get("analysis_date", "N/A")))
+    a2.metric("Debate Rounds", format_number(final_state.get("debate_round"), decimals=2))
+    a3.metric("Bull Model", get_agent_label(agent_models, "bull_researcher"))
+    a4.metric("Bear Model", get_agent_label(agent_models, "bear_researcher"))
+    a5.metric("Audit Status", final_state.get("audit_status", "N/A"))
+
+    st.info(
+        f"Evidence basis: {analysis_protocol.get('analysis_basis', 'N/A')}. "
+        f"Debate method: {analysis_protocol.get('debate_style', 'N/A')}. "
+        f"Configured max rounds: {format_number(max_rounds, decimals=2)}."
+    )
+    st.caption(analysis_protocol.get("independence_note", ""))
+
+
+def render_agent_brief(title: str, content: str, agent_models: dict, agent_key: str, description: str) -> None:
+    st.markdown(f"#### {title}")
+    st.caption(description)
+    render_agent_model_badge(agent_models, agent_key)
+    st.markdown(content)
+
+
+def render_research_manager_section(transcript: dict, scorecard: dict, agent_models: dict) -> None:
+    st.markdown("#### Research Manager")
+    st.caption("This manager converts the bull/bear evidence into a weighted scorecard and a go / watchlist / reject ruling.")
+    render_agent_model_badge(agent_models, "research_manager")
+
+    summary1, summary2, summary3 = st.columns(3)
+    summary1.metric("Score", f"{format_number(scorecard.get('total_score'))}/40.00")
+    summary2.metric("Verdict", scorecard.get("verdict", "N/A"))
+    summary3.metric("Confidence", format_confidence_pct(scorecard.get("confidence")))
+
+    st.markdown(transcript.get("research_manager_ruling", "No ruling generated."))
+
+
+def render_risk_manager_section(risk_plan: dict, agent_models: dict) -> None:
+    st.markdown("#### Risk Manager")
+    st.caption("This manager explains how sizing is approved, reduced, or vetoed from the draft execution plan.")
+    render_agent_model_badge(agent_models, "risk_manager")
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Risk Approval", risk_plan.get("approval", "N/A"))
+    r2.metric("Capital Allocation", risk_plan.get("capital_allocation", "N/A"))
+    r3.metric("Primary Risk", risk_plan.get("primary_risk", "N/A"))
+
+    st.info(risk_plan.get("allocation_reason", ""))
+    st.markdown(risk_plan.get("risk_ruling", "No risk ruling generated."))
+
+
+def render_audit_manager_section(final_state: dict, agent_models: dict) -> None:
+    transcript = final_state.get("debate_transcript", {})
+    audit_notes = final_state.get("audit_notes", []) or []
+
+    st.markdown("#### Audit Manager")
+    st.caption("This final control verifies the date boundary, required evidence, and whether the final decision is consistent with the score and risk outputs.")
+    render_agent_model_badge(agent_models, "audit_manager")
+
+    a1, a2 = st.columns(2)
+    a1.metric("Audit Status", final_state.get("audit_status", "N/A"))
+    a2.metric("Log Entries", format_number(len(audit_notes)))
+
+    st.markdown(transcript.get("audit_manager_ruling", "No audit ruling generated."))
+
+    if audit_notes:
+        audit_df = pd.DataFrame({"Verification Log": audit_notes})
+        st.dataframe(audit_df, use_container_width=True, hide_index=True)
 
 
 def render_reference_page() -> None:
@@ -928,20 +1021,20 @@ def render_fact_sheet(metrics: dict) -> None:
 
 
 def render_scorecard(scorecard: dict) -> None:
-    st.markdown("#### Research Manager Scoring Criteria and Result")
+    st.markdown("#### Scorecard")
     criteria = scorecard.get("criteria") or []
     if criteria:
         score_df = pd.DataFrame(criteria)
+        if "score" in score_df.columns:
+            score_df["score"] = score_df["score"].apply(lambda value: format_number(value))
         st.dataframe(score_df, use_container_width=True, hide_index=True)
     else:
         st.info("Scorecard criteria are not available for this run, so the view is showing the fallback summary only.")
 
     s1, s2, s3 = st.columns(3)
-    s1.metric("Total Score", f"{scorecard.get('total_score', 'N/A')}/40")
+    s1.metric("Total Score", f"{format_number(scorecard.get('total_score'))}/40.00")
     s2.metric("Verdict", scorecard.get("verdict", "N/A"))
-    confidence = scorecard.get("confidence")
-    confidence_text = f"{confidence * 100:.0f}%" if isinstance(confidence, (int, float)) else "N/A"
-    s3.metric("Confidence", confidence_text)
+    s3.metric("Confidence", format_confidence_pct(scorecard.get("confidence")))
 
 
 def render_execution_and_risk(execution_plan: dict, risk_plan: dict) -> None:
@@ -952,13 +1045,9 @@ def render_execution_and_risk(execution_plan: dict, risk_plan: dict) -> None:
     e3.metric("Stop Loss", execution_plan.get("stop_loss", "N/A"))
     e4.metric("Time Horizon", execution_plan.get("time_horizon", "N/A"))
     st.write(execution_plan.get("entry_logic", ""))
-
-    st.markdown("#### Portfolio Manager Risk Allocation")
-    r1, r2, r3 = st.columns(3)
-    r1.metric("Risk Approval", risk_plan.get("approval", "N/A"))
-    r2.metric("Capital Allocation", risk_plan.get("capital_allocation", "N/A"))
-    r3.metric("Primary Risk", risk_plan.get("primary_risk", "N/A"))
-    st.info(risk_plan.get("allocation_reason", ""))
+    risk_distance = execution_plan.get("risk_distance_pct")
+    if risk_distance is not None:
+        st.caption(f"Stop distance from current price: {format_number(risk_distance, suffix='%')}")
 
 
 def render_decision_view(ticker: str, final_state: dict, metrics: dict) -> None:
@@ -966,6 +1055,7 @@ def render_decision_view(ticker: str, final_state: dict, metrics: dict) -> None:
     scorecard = final_state.get("research_scorecard", {})
     execution_plan = final_state.get("execution_plan", {})
     risk_plan = final_state.get("risk_assessment") or final_state.get("risk_plan", {})
+    agent_models = final_state.get("agent_models", {})
     trader_plan = parse_trader_plan(final_state.get("trader_plan", {}).get("plan_details"))
     if trader_plan and "action" in trader_plan:
         execution_plan = {**execution_plan, **trader_plan}
@@ -976,29 +1066,51 @@ def render_decision_view(ticker: str, final_state: dict, metrics: dict) -> None:
         "The views below expose how the system thinks: the factual analyst notes, the scorecard logic, the execution framework, and the final risk-aware portfolio recommendation.",
     )
     render_fact_sheet(metrics)
+    render_process_audit(final_state)
     render_scorecard(scorecard)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### Fundamental Analyst")
-        st.markdown(final_state.get("analyst_reports", {}).get("fundamental", "No report generated."))
-        st.markdown("#### Bull Case")
-        st.markdown(transcript.get("bull", "No bull case generated."))
+        render_agent_brief(
+            "Fundamental Analyst",
+            final_state.get("analyst_reports", {}).get("fundamental", "No report generated."),
+            agent_models,
+            "fundamental_analyst",
+            "What: point-in-time fundamentals. Why: validate profitability. How: use only published metrics available on the analysis date.",
+        )
+        render_agent_brief(
+            "Bull Case",
+            transcript.get("bull", "No bull case generated."),
+            agent_models,
+            "bull_researcher",
+            "What: strongest long thesis. Why: identify upside drivers. How: argue from the same historical dataset without future data.",
+        )
     with col2:
-        st.markdown("#### Technical Analyst")
-        st.markdown(final_state.get("analyst_reports", {}).get("technical", "No report generated."))
-        st.markdown("#### Bear Case")
-        st.markdown(transcript.get("bear", "No bear case generated."))
+        render_agent_brief(
+            "Technical Analyst",
+            final_state.get("analyst_reports", {}).get("technical", "No report generated."),
+            agent_models,
+            "technical_analyst",
+            "What: trend, momentum, liquidity, and volatility. Why: validate the tape. How: use only historical market structure as of the selected date.",
+        )
+        render_agent_brief(
+            "Bear Case",
+            transcript.get("bear", "No bear case generated."),
+            agent_models,
+            "bear_researcher",
+            "What: strongest downside thesis. Why: surface hidden risks. How: challenge the bull case using the same historical evidence only.",
+        )
 
-    st.markdown("#### Research Manager Ruling")
-    st.markdown(transcript.get("research_manager_ruling", "No ruling generated."))
+    render_research_manager_section(transcript, scorecard, agent_models)
 
     render_execution_and_risk(execution_plan, risk_plan)
+    render_risk_manager_section(risk_plan, agent_models)
+    render_audit_manager_section(final_state, agent_models)
 
     st.markdown("#### Portfolio Manager Final Decision")
     d1, d2 = st.columns(2)
     d1.metric("Final Action", final_state.get("final_decision", "UNKNOWN"))
-    d2.metric("Confidence", f"{final_state.get('confidence', 0) * 100:.0f}%")
+    d2.metric("Confidence", format_confidence_pct(final_state.get("confidence", 0)))
 
     st.markdown("#### Detailed Thesis")
     st.markdown(str(final_state.get("pm_reasoning", "No portfolio manager reasoning generated.")))
@@ -1027,6 +1139,8 @@ def build_initial_state(ticker: str, analysis_date: date, metrics: dict, macro_d
         "pm_reasoning": "",
         "audit_status": "PENDING",
         "audit_notes": [],
+        "agent_models": {},
+        "analysis_protocol": {},
     }
 
 
@@ -1060,6 +1174,12 @@ def render_selected_analysis(screen_state: dict) -> list[dict]:
 
         append_log(f"Running Step 3 analysis for {ticker}.")
         initial_state = build_initial_state(ticker, screen_state["effective_date"], metrics, screen_state["macro_data"])
+        initial_state["agent_models"] = st.session_state.agent_graph.describe_agent_setup()
+        initial_state["analysis_protocol"] = st.session_state.agent_graph.describe_analysis_protocol()
+        initial_state["audit_notes"] = [
+            f"Historical guardrail active for analysis date {screen_state['effective_date']}.",
+            "Bull and Bear researchers are independent nodes and may only use point-in-time inputs supplied by the app.",
+        ]
         with st.spinner(f"Running multi-agent analysis for {ticker}..."):
             final_state = st.session_state.agent_graph.run_analysis(initial_state)
 
@@ -1075,7 +1195,8 @@ def render_selected_analysis(screen_state: dict) -> list[dict]:
         {
             "Ticker": ticker,
             "Final Decision": final_state.get("final_decision", "UNKNOWN"),
-            "Confidence": round(final_state.get("confidence", 0.0), 4),
+            "Confidence": round(final_state.get("confidence", 0.0), 2),
+            "Audit Status": final_state.get("audit_status", "N/A"),
             "Risk Approval": (final_state.get("risk_assessment") or {}).get("approval", "N/A"),
             "Capital Allocation": (final_state.get("risk_assessment") or {}).get("capital_allocation", "N/A"),
         }
@@ -1095,7 +1216,8 @@ def collect_cached_final_decisions(screen_state: dict) -> list[dict]:
             {
                 "Ticker": ticker,
                 "Final Decision": final_state.get("final_decision", "UNKNOWN"),
-                "Confidence": round(final_state.get("confidence", 0.0), 4),
+                "Confidence": round(final_state.get("confidence", 0.0), 2),
+                "Audit Status": final_state.get("audit_status", "N/A"),
                 "Risk Approval": (final_state.get("risk_assessment") or {}).get("approval", "N/A"),
                 "Capital Allocation": (final_state.get("risk_assessment") or {}).get("capital_allocation", "N/A"),
             }
