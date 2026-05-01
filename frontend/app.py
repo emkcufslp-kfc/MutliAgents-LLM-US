@@ -25,12 +25,14 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = APP_ROOT / "data" / "cache"
 INDEX_SOURCES = {
     "SP500": {
+        "csv_url": "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
         "url": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
         "candidate_columns": ["Symbol", "Ticker symbol", "Ticker"],
         "min_count": 450,
         "cache_file": CACHE_DIR / "sp500_members.csv",
     },
     "Nasdaq 100": {
+        "csv_url": "https://github.com/Gary-Strauss/NASDAQ100_Constituents/raw/refs/heads/master/data/nasdaq100_constituents.csv",
         "url": "https://en.wikipedia.org/wiki/Nasdaq-100",
         "candidate_columns": ["Ticker", "Symbol"],
         "min_count": 90,
@@ -466,6 +468,24 @@ def load_index_members(index_name: str) -> tuple[list[str], str]:
     source = INDEX_SOURCES[index_name]
     cache_file = source["cache_file"]
     cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+    csv_url = source.get("csv_url")
+    if csv_url:
+        try:
+            csv_df = pd.read_csv(csv_url)
+            for column in source["candidate_columns"]:
+                if column not in csv_df.columns:
+                    continue
+                tickers = [
+                    normalize_ticker(value)
+                    for value in csv_df[column].dropna().astype(str).tolist()
+                ]
+                tickers = list(dict.fromkeys(ticker for ticker in tickers if ticker))
+                if len(tickers) >= source["min_count"]:
+                    pd.DataFrame({"Ticker": tickers}).to_csv(cache_file, index=False)
+                    return tickers, "live-csv"
+        except Exception:
+            pass
 
     try:
         tables = pd.read_html(source["url"])
