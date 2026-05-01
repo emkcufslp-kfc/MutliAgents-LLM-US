@@ -356,6 +356,10 @@ def init_session_state() -> None:
         "selected_ticker": None,
         "analysis_cache": {},
         "analysis_order": [],
+        "fundamental_filter_config": {},
+        "technical1_filter_config": {},
+        "technical2_filter_config": {},
+        "filter_signature": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -441,6 +445,56 @@ def format_confidence_pct(value) -> str:
     if numeric is None:
         return "N/A"
     return f"{numeric * 100:,.2f}%"
+
+
+def default_fundamental_config() -> dict:
+    return {
+        "preset": "TradingView match",
+        "apply_in_scan": True,
+        "min_eps_ttm_yoy_pct": 20.0,
+        "min_revenue_ttm_yoy_pct": 20.0,
+        "min_roe_ttm_pct": 15.0,
+        "roe_stability_max_std_dev": 40.0,
+        "min_market_cap_b": 10.0,
+        "min_passed_fundamental_rules": 3,
+    }
+
+
+def default_technical1_config() -> dict:
+    return {
+        "preset": "Technical-Lazy",
+        "apply_in_scan": False,
+        "require_close_above_all_mas": True,
+        "require_bullish_ma_stack": True,
+        "within_52w_high_pct": 25.0,
+        "above_52w_low_pct": 25.0,
+    }
+
+
+def default_technical2_config() -> dict:
+    return {
+        "preset": "Technical-VIX",
+        "apply_in_scan": False,
+        "enable_alert": False,
+        "wvf_lookback_stddev_high": 22,
+        "wvf_bollinger_band_length": 20,
+        "wvf_bollinger_band_std_dev_mult": 2.0,
+        "wvf_lookback_percentile_high": 50,
+        "wvf_highest_percentile": 0.85,
+        "wvf_lowest_percentile": 1.01,
+    }
+
+
+def build_screening_config(fundamental_config: dict, technical1_config: dict, technical2_config: dict) -> dict:
+    return {
+        "fundamental": dict(fundamental_config),
+        "technical1": dict(technical1_config),
+        "technical2": dict(technical2_config),
+    }
+
+
+def config_signature(config: dict) -> str:
+    return str(tuple(sorted((key, str(value)) for key, value in config.items())))
 
 
 def get_latest_us_trading_day(reference_date: date | None = None) -> date:
@@ -741,6 +795,7 @@ def build_screen_state(
     macro_data: dict,
     survivors: list[str],
     df_results: pd.DataFrame,
+    screening_config: dict,
 ) -> dict:
     return {
         "target_date": target_date,
@@ -750,6 +805,7 @@ def build_screen_state(
         "macro_data": macro_data,
         "survivors": survivors,
         "df_results": df_results,
+        "screening_config": screening_config,
     }
 
 
@@ -758,10 +814,27 @@ def get_display_dataframe(df_results: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     display_df = df_results.copy()
-    currency_columns = ["Price", "50 DMA", "200 DMA"]
+    currency_columns = ["Price", "50 DMA", "150 DMA", "200 DMA", "52W High", "52W Low"]
     volume_columns = ["20D ADV"]
-    percent_columns = ["Price vs 50DMA %", "Price vs 200DMA %", "50DMA vs 200DMA %", "1M Return %", "3M Return %", "6M Return %", "20D Volatility %"]
+    percent_columns = [
+        "Price vs 50DMA %",
+        "Price vs 150DMA %",
+        "Price vs 200DMA %",
+        "50DMA vs 200DMA %",
+        "Within 52W High %",
+        "Above 52W Low %",
+        "1M Return %",
+        "3M Return %",
+        "6M Return %",
+        "20D Volatility %",
+        "EPS TTM YoY %",
+        "Revenue TTM YoY %",
+        "ROE TTM %",
+        "ROE Stability Std Dev",
+        "WVF Value",
+    ]
     fundamental_columns = ["FCF", "Net Income", "Operating CF"]
+    market_cap_columns = ["Market Cap (B USD)"]
 
     for column in currency_columns:
         if column in display_df.columns:
@@ -775,6 +848,9 @@ def get_display_dataframe(df_results: pd.DataFrame) -> pd.DataFrame:
     for column in fundamental_columns:
         if column in display_df.columns:
             display_df[column] = display_df[column].apply(format_compact_currency)
+    for column in market_cap_columns:
+        if column in display_df.columns:
+            display_df[column] = display_df[column].apply(format_number)
 
     return display_df
 
@@ -942,16 +1018,25 @@ def render_step2_section(screen_state: dict) -> None:
     df_results = screen_state["df_results"]
     survivors = screen_state["survivors"]
     effective_date = screen_state["effective_date"]
+    screening_config = screen_state.get("screening_config", {})
+    fundamental_config = screening_config.get("fundamental", {})
+    technical1_config = screening_config.get("technical1", {})
+    technical2_config = screening_config.get("technical2", {})
 
     render_section_header(
         "Step 2",
         f"Point-In-Time Pre-Screening (As of {effective_date})",
-        "This screen uses actual historical price structure, liquidity, and fundamental profitability to decide which names deserve deeper research.",
+        "This screen evaluates independent Fundamental, Technical 1, and Technical 2 modules using only data available as of the selected date.",
     )
     if screen_state["universe_notes"]:
         st.caption("Universe sources: " + " | ".join(screen_state["universe_notes"]))
 
-    st.markdown("Rules applied: minimum $10 share price, 20D ADV above 1M shares, price above 200DMA, 50DMA above 200DMA, positive free cash flow, and positive net income.")
+    st.markdown(
+        f"Fundamental applied: {'Yes' if fundamental_config.get('apply_in_scan') else 'No'} | "
+        f"Technical 1 applied: {'Yes' if technical1_config.get('apply_in_scan') else 'No'} | "
+        f"Technical 2 applied: {'Yes' if technical2_config.get('apply_in_scan') else 'No'} | "
+        f"WVF alert enabled: {'Yes' if technical2_config.get('enable_alert') else 'No'}"
+    )
     st.dataframe(get_display_dataframe(df_results), use_container_width=True, hide_index=True)
     st.success(f"Qualified for further research: {len(survivors)} out of {len(screen_state['universe'])}.")
 
@@ -1227,50 +1312,163 @@ def collect_cached_final_decisions(screen_state: dict) -> list[dict]:
 
 def render_analysis_page() -> None:
     default_date = get_latest_us_trading_day()
-    st.sidebar.markdown('<div class="side-label">Universe Source</div>', unsafe_allow_html=True)
-    universe_choice = st.sidebar.selectbox(
-        "Universe Source",
-        options=list(UNIVERSE_CHOICES.keys()),
-        index=0,
-        label_visibility="collapsed",
-    )
+    if not st.session_state.fundamental_filter_config:
+        st.session_state.fundamental_filter_config = default_fundamental_config()
+    if not st.session_state.technical1_filter_config:
+        st.session_state.technical1_filter_config = default_technical1_config()
+    if not st.session_state.technical2_filter_config:
+        st.session_state.technical2_filter_config = default_technical2_config()
+
+    st.sidebar.markdown('<div class="side-label">Step 1</div>', unsafe_allow_html=True)
+    st.sidebar.markdown("**Choose Universe**")
+    universe_choice = st.sidebar.selectbox("Universe Source", options=list(UNIVERSE_CHOICES.keys()), index=0)
     selected_indices = UNIVERSE_CHOICES[universe_choice]
-
-    st.sidebar.markdown('<div class="side-label">Or Upload Tickers CSV</div>', unsafe_allow_html=True)
-    uploaded_universe = st.sidebar.file_uploader(
-        "Upload CSV Universe",
-        type=["csv"],
-        label_visibility="collapsed",
-    )
-
-    st.sidebar.markdown('<div class="side-label">Or Enter Tickers</div>', unsafe_allow_html=True)
+    uploaded_universe = st.sidebar.file_uploader("Upload CSV Universe", type=["csv"])
     tickers_input = st.sidebar.text_area(
         "Direct Tickers",
         value="",
         height=90,
         help="Enter one ticker or multiple tickers with commas, spaces, or new lines.",
-        label_visibility="collapsed",
         placeholder="AAPL, MSFT, NVDA",
-    )
-
-    st.sidebar.markdown('<div class="side-label">Screen Date</div>', unsafe_allow_html=True)
-    target_date = st.sidebar.date_input("Analysis Date", value=default_date, label_visibility="collapsed")
-    run_analysis = st.sidebar.button("Run AI Swarm", use_container_width=True)
-
-    st.sidebar.markdown('<div class="side-label">Workflow</div>', unsafe_allow_html=True)
-    st.sidebar.markdown(
-        '<div class="side-note">1. Build the universe from S&amp;P 500, Nasdaq 100, both, CSV, and/or direct tickers.<br>'
-        '2. Run the point-in-time screen using actual historical and fundamental data.<br>'
-        '3. Click a qualified ticker to open the analyst, scoring, execution, and portfolio views.</div>',
-        unsafe_allow_html=True,
     )
 
     uploaded_tickers = load_uploaded_tickers(uploaded_universe)
     manual_tickers = parse_direct_tickers(tickers_input)
+    universe_ready = bool(selected_indices or uploaded_tickers or manual_tickers)
+
+    st.sidebar.markdown('<div class="side-label">Step 2</div>', unsafe_allow_html=True)
+    st.sidebar.markdown("**Screening Setup**")
+
+    with st.sidebar.expander("Fundamental Setup", expanded=True):
+        st.caption("Matches TradingView-style core rules. The 3 growth / quality rules are counted independently.")
+        fundamental_preset = st.selectbox("Preset", ["TradingView match"], key="fundamental_preset")
+        fundamental_apply = st.checkbox(
+            "Require fundamentals for pass",
+            value=st.session_state.fundamental_filter_config.get("apply_in_scan", True),
+            key="fundamental_apply",
+        )
+        min_eps = st.number_input("Min EPS TTM YoY (%)", value=float(st.session_state.fundamental_filter_config.get("min_eps_ttm_yoy_pct", 20.0)), step=1.0, format="%.2f")
+        min_revenue = st.number_input("Min Revenue TTM YoY (%)", value=float(st.session_state.fundamental_filter_config.get("min_revenue_ttm_yoy_pct", 20.0)), step=1.0, format="%.2f")
+        min_roe = st.number_input("Min ROE TTM (%)", value=float(st.session_state.fundamental_filter_config.get("min_roe_ttm_pct", 15.0)), step=1.0, format="%.2f")
+        max_roe_std = st.number_input("ROE Stability Max Std-Dev", value=float(st.session_state.fundamental_filter_config.get("roe_stability_max_std_dev", 40.0)), step=1.0, format="%.2f")
+        min_market_cap_b = st.number_input("Min Market Cap (B USD)", value=float(st.session_state.fundamental_filter_config.get("min_market_cap_b", 10.0)), step=1.0, format="%.2f")
+        min_fundamental_rules = st.number_input("Min Passed Fundamental Rules (Out of 3)", min_value=1, max_value=3, value=int(st.session_state.fundamental_filter_config.get("min_passed_fundamental_rules", 3)), step=1)
+        st.session_state.fundamental_filter_config = {
+            "preset": fundamental_preset,
+            "apply_in_scan": fundamental_apply,
+            "min_eps_ttm_yoy_pct": float(min_eps),
+            "min_revenue_ttm_yoy_pct": float(min_revenue),
+            "min_roe_ttm_pct": float(min_roe),
+            "roe_stability_max_std_dev": float(max_roe_std),
+            "min_market_cap_b": float(min_market_cap_b),
+            "min_passed_fundamental_rules": int(min_fundamental_rules),
+        }
+
+    with st.sidebar.expander("Technical Indicator 1", expanded=False):
+        st.caption("MA checks use MA50, MA150, and MA200. This module works independently from fundamentals.")
+        technical1_preset = st.selectbox("Preset", ["Technical-Lazy"], key="technical1_preset")
+        technical1_apply = st.checkbox(
+            "Apply technical-lazy filter in scan",
+            value=st.session_state.technical1_filter_config.get("apply_in_scan", False),
+            key="technical1_apply",
+        )
+        require_close_above = st.checkbox(
+            "Require Close > MA50, MA150, MA200",
+            value=st.session_state.technical1_filter_config.get("require_close_above_all_mas", True),
+            key="technical1_close_above",
+        )
+        require_stack = st.checkbox(
+            "Require MA50 > MA150 > MA200",
+            value=st.session_state.technical1_filter_config.get("require_bullish_ma_stack", True),
+            key="technical1_ma_stack",
+        )
+        within_high = st.number_input("Within 52W High (%)", value=float(st.session_state.technical1_filter_config.get("within_52w_high_pct", 25.0)), step=1.0, format="%.2f")
+        above_low = st.number_input("Above 52W Low (%)", value=float(st.session_state.technical1_filter_config.get("above_52w_low_pct", 25.0)), step=1.0, format="%.2f")
+        st.session_state.technical1_filter_config = {
+            "preset": technical1_preset,
+            "apply_in_scan": technical1_apply,
+            "require_close_above_all_mas": require_close_above,
+            "require_bullish_ma_stack": require_stack,
+            "within_52w_high_pct": float(within_high),
+            "above_52w_low_pct": float(above_low),
+        }
+
+    with st.sidebar.expander("Technical Indicator 2", expanded=False):
+        st.caption("Williams VIX Fix runs independently. You can keep it as an alert or also apply it in the scan.")
+        technical2_preset = st.selectbox("Preset", ["Technical-VIX"], key="technical2_preset")
+        technical2_apply = st.checkbox(
+            "Apply technical-vix filter in scan",
+            value=st.session_state.technical2_filter_config.get("apply_in_scan", False),
+            key="technical2_apply",
+        )
+        technical2_alert = st.checkbox(
+            "Enable Williams VIX Fix alert",
+            value=st.session_state.technical2_filter_config.get("enable_alert", False),
+            key="technical2_alert",
+        )
+        wvf_lookback = st.number_input("WVF Lookback Period Standard Deviation High", value=int(st.session_state.technical2_filter_config.get("wvf_lookback_stddev_high", 22)), step=1)
+        wvf_bb_length = st.number_input("WVF Bollinger Band Length", value=int(st.session_state.technical2_filter_config.get("wvf_bollinger_band_length", 20)), step=1)
+        wvf_bb_mult = st.number_input("WVF Bollinger Band Std Dev Mult", value=float(st.session_state.technical2_filter_config.get("wvf_bollinger_band_std_dev_mult", 2.0)), step=0.1, format="%.2f")
+        wvf_pct_lookback = st.number_input("WVF Look Back Period Percentile High", value=int(st.session_state.technical2_filter_config.get("wvf_lookback_percentile_high", 50)), step=1)
+        wvf_high_pct = st.number_input("WVF Highest Percentile", value=float(st.session_state.technical2_filter_config.get("wvf_highest_percentile", 0.85)), step=0.01, format="%.2f")
+        wvf_low_pct = st.number_input("WVF Lowest Percentile", value=float(st.session_state.technical2_filter_config.get("wvf_lowest_percentile", 1.01)), step=0.01, format="%.2f")
+        st.session_state.technical2_filter_config = {
+            "preset": technical2_preset,
+            "apply_in_scan": technical2_apply,
+            "enable_alert": technical2_alert,
+            "wvf_lookback_stddev_high": int(wvf_lookback),
+            "wvf_bollinger_band_length": int(wvf_bb_length),
+            "wvf_bollinger_band_std_dev_mult": float(wvf_bb_mult),
+            "wvf_lookback_percentile_high": int(wvf_pct_lookback),
+            "wvf_highest_percentile": float(wvf_high_pct),
+            "wvf_lowest_percentile": float(wvf_low_pct),
+        }
+
+    screening_config = build_screening_config(
+        st.session_state.fundamental_filter_config,
+        st.session_state.technical1_filter_config,
+        st.session_state.technical2_filter_config,
+    )
+    screening_ready = True
+    st.sidebar.caption(
+        f"Fundamental: {'required' if screening_config['fundamental']['apply_in_scan'] else 'optional'} | "
+        f"Tech 1: {'applied' if screening_config['technical1']['apply_in_scan'] else 'not applied'} | "
+        f"Tech 2: {'applied' if screening_config['technical2']['apply_in_scan'] else 'not applied'}"
+    )
+
+    st.sidebar.markdown('<div class="side-label">Step 3</div>', unsafe_allow_html=True)
+    st.sidebar.markdown("**Analysis Date**")
+    target_date = st.sidebar.date_input("Analysis Date", value=default_date)
     effective_date = resolve_analysis_date(target_date)
+    date_ready = bool(effective_date)
 
     if effective_date != target_date:
         st.sidebar.info(f"Selected date is not a US trading day. The app will use {effective_date}.")
+
+    st.sidebar.markdown('<div class="side-label">Step 4</div>', unsafe_allow_html=True)
+    st.sidebar.markdown("**Run Screen**")
+    run_analysis = st.sidebar.button("Run AI Swarm", use_container_width=True)
+
+    st.sidebar.markdown('<div class="side-label">Workflow Progress</div>', unsafe_allow_html=True)
+    st.sidebar.markdown(
+        f'<div class="side-note">Step 1 Universe: {"Done" if universe_ready else "Pending"}<br>'
+        f'Step 2 Screening Setup: {"Done" if screening_ready else "Pending"}<br>'
+        f'Step 3 Analysis Date: {"Done" if date_ready else "Pending"}<br>'
+        f'Step 4 Run Screen: {"Ready" if universe_ready and screening_ready and date_ready else "Locked"}</div>',
+        unsafe_allow_html=True,
+    )
+
+    signature = config_signature(screening_config)
+    if st.session_state.filter_signature and st.session_state.filter_signature != signature and st.session_state.screen_state:
+        st.session_state.screen_state = None
+        st.session_state.selected_ticker = None
+        st.session_state.analysis_cache = {}
+        st.session_state.analysis_order = []
+        st.session_state.last_screen_results = None
+        st.session_state.last_survivors = []
+        st.session_state.last_export_df = None
+        append_log("Step 2 screening setup changed. Cached screen results were cleared to avoid stale output.")
+    st.session_state.filter_signature = signature
 
     if run_analysis:
         universe, notes, errors = build_universe(selected_indices, uploaded_tickers, manual_tickers)
@@ -1292,7 +1490,7 @@ def render_analysis_page() -> None:
             pit_context = PointInTimeContext(effective_date)
             price_loader = PriceLoader()
             fundamental_loader = FundamentalLoader(fallback_lag_days=45)
-            screener = HardScreener(price_loader, fundamental_loader)
+            screener = HardScreener(price_loader, fundamental_loader, screening_config)
             survivors, df_results = screener.run_screen(universe, pit_context)
 
         st.session_state.screen_state = build_screen_state(
@@ -1303,6 +1501,7 @@ def render_analysis_page() -> None:
             macro_data=macro_data,
             survivors=survivors,
             df_results=df_results,
+            screening_config=screening_config,
         )
         st.session_state.last_screen_results = df_results
         st.session_state.last_survivors = survivors
