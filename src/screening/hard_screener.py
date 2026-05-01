@@ -196,14 +196,16 @@ class HardScreener:
         within_high_ok = within_high is not None and within_high <= max_within_high
         passed_checks.append(within_high_ok)
         detail_parts.append(
-            f"Within 52W High: {within_high:.2f if within_high is not None else 'N/A'}"
+            f"Within 52W High: {within_high:.2f}" if within_high is not None else "Within 52W High: N/A"
         )
 
         above_low = self._safe_float(metrics.get("above_52w_low_pct"))
         min_above_low = float(config.get("above_52w_low_pct", 25.0))
         above_low_ok = above_low is not None and above_low >= min_above_low
         passed_checks.append(above_low_ok)
-        detail_parts.append(f"Above 52W Low: {above_low:.2f if above_low is not None else 'N/A'}")
+        detail_parts.append(
+            f"Above 52W Low: {above_low:.2f}" if above_low is not None else "Above 52W Low: N/A"
+        )
 
         detail_parts[-2] = (
             f"Within 52W High: {within_high:.2f}" if within_high is not None else "Within 52W High: N/A"
