@@ -888,22 +888,22 @@ def render_survivor_picker(screen_state: dict) -> None:
         if column not in survivor_df.columns:
             survivor_df[column] = "N/A"
     survivor_df = survivor_df[summary_columns]
-    st.dataframe(survivor_df, use_container_width=True, hide_index=True)
-    st.caption(
-        f"Hover a ticker button to see the Step 3 hint, then click to launch the multi-agent review using only data available as of {screen_state['effective_date']}."
+    selection = st.dataframe(
+        survivor_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="survivor_table",
     )
+    st.caption(f"Click a ticker row to launch the multi-agent review using only data available as of {screen_state['effective_date']}.")
 
-    for start in range(0, len(survivors), 6):
-        cols = st.columns(min(6, len(survivors) - start))
-        for offset, ticker in enumerate(survivors[start:start + 6]):
-            if cols[offset].button(
-                ticker,
-                key=f"ticker_{ticker}",
-                use_container_width=True,
-                help=f"Run Step 3 multi-agent analysis for {ticker} using the historical point-in-time dataset as of {screen_state['effective_date']}.",
-            ):
-                st.session_state.selected_ticker = ticker
-                append_log(f"User selected {ticker} for Step 3 analysis.")
+    selected_rows = getattr(getattr(selection, "selection", None), "rows", [])
+    if selected_rows:
+        selected_ticker = survivor_df.iloc[selected_rows[0]]["Ticker"]
+        if st.session_state.selected_ticker != selected_ticker:
+            st.session_state.selected_ticker = selected_ticker
+            append_log(f"User selected {selected_ticker} for Step 3 analysis.")
 
 
 def render_fact_sheet(metrics: dict) -> None:
@@ -929,13 +929,19 @@ def render_fact_sheet(metrics: dict) -> None:
 
 def render_scorecard(scorecard: dict) -> None:
     st.markdown("#### Research Manager Scoring Criteria and Result")
-    score_df = pd.DataFrame(scorecard["criteria"])
-    st.dataframe(score_df, use_container_width=True, hide_index=True)
+    criteria = scorecard.get("criteria") or []
+    if criteria:
+        score_df = pd.DataFrame(criteria)
+        st.dataframe(score_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Scorecard criteria are not available for this run, so the view is showing the fallback summary only.")
 
     s1, s2, s3 = st.columns(3)
-    s1.metric("Total Score", f"{scorecard['total_score']}/40")
-    s2.metric("Verdict", scorecard["verdict"])
-    s3.metric("Confidence", f"{scorecard['confidence'] * 100:.0f}%")
+    s1.metric("Total Score", f"{scorecard.get('total_score', 'N/A')}/40")
+    s2.metric("Verdict", scorecard.get("verdict", "N/A"))
+    confidence = scorecard.get("confidence")
+    confidence_text = f"{confidence * 100:.0f}%" if isinstance(confidence, (int, float)) else "N/A"
+    s3.metric("Confidence", confidence_text)
 
 
 def render_execution_and_risk(execution_plan: dict, risk_plan: dict) -> None:
