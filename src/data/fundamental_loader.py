@@ -8,6 +8,7 @@ import pandas as pd
 import yfinance as yf
 
 from . import alpha_vantage_loader
+from . import sec_edgar_loader
 from .point_in_time import PointInTimeContext
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,51 @@ class FundamentalLoader:
 
     def _cache_file(self, ticker: str) -> Path:
         return self.cache_dir / f"{ticker}_fundamentals.json"
+
+    def _needs_enrichment(self, snapshot: Dict[str, Any]) -> bool:
+        return all(
+            snapshot.get(key) is None
+            for key in [
+                "eps_ttm_yoy_pct",
+                "revenue_ttm_yoy_pct",
+                "roe_ttm_pct",
+                "roe_stability_std_pct",
+                "market_cap_b",
+            ]
+        )
+
+    def _try_sec_fallback(
+        self,
+        ticker: str,
+        pit_context: PointInTimeContext,
+        current_price: float | None = None,
+    ) -> Dict[str, Any]:
+        try:
+            return sec_edgar_loader.fetch_fundamentals(ticker, pit_context, current_price=current_price)
+        except Exception as exc:
+            logger.error(f"SEC companyfacts fallback failed for {ticker}: {exc}")
+            return {"error": str(exc)}
+
+    def _try_alpha_vantage_fallback(self, ticker: str, pit_context: PointInTimeContext) -> Dict[str, Any]:
+        if not alpha_vantage_loader.has_api_key():
+            return {"error": "ALPHA_VANTAGE_API_KEY is not configured"}
+        try:
+            fundamentals = alpha_vantage_loader.fetch_fundamentals(ticker, pit_context, self.fallback_lag_days)
+            fundamentals["source"] = "alpha_vantage"
+            return fundamentals
+        except Exception as exc:
+            logger.error(f"Alpha Vantage fundamentals fallback failed for {ticker}: {exc}")
+            return {"error": str(exc)}
+
+    def _merge_snapshots(self, primary: Dict[str, Any], secondary: Dict[str, Any], merged_source: str) -> Dict[str, Any]:
+        merged = dict(primary)
+        for key, value in secondary.items():
+            if key == "source":
+                continue
+            if merged.get(key) in (None, "", "unknown", "unavailable") and value not in (None, ""):
+                merged[key] = value
+        merged["source"] = merged_source
+        return merged
 
     def _save_cached_reports(self, ticker: str, income_df: pd.DataFrame, cash_flow_df: pd.DataFrame) -> None:
         payload = {
@@ -237,6 +283,10 @@ class FundamentalLoader:
         if not cached_inc.empty and not cached_cf.empty:
             snapshot = self._build_snapshot(ticker, pit_context, cached_inc, cached_cf, pd.DataFrame(), "cache", current_price)
             if "error" not in snapshot:
+                if self._needs_enrichment(snapshot):
+                    sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+                    if "error" not in sec_snapshot:
+                        return self._merge_snapshots(snapshot, sec_snapshot, "cache+sec")
                 return snapshot
 
         ticker_obj = yf.Ticker(ticker)
@@ -250,33 +300,50 @@ class FundamentalLoader:
             if not cached_inc.empty and not cached_cf.empty:
                 snapshot = self._build_snapshot(ticker, pit_context, cached_inc, cached_cf, pd.DataFrame(), "cache", current_price)
                 if "error" not in snapshot:
+                    if self._needs_enrichment(snapshot):
+                        sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+                        if "error" not in sec_snapshot:
+                            return self._merge_snapshots(snapshot, sec_snapshot, "cache+sec")
                     return snapshot
-            if alpha_vantage_loader.has_api_key():
-                try:
-                    fundamentals = alpha_vantage_loader.fetch_fundamentals(ticker, pit_context, self.fallback_lag_days)
-                    fundamentals["source"] = "alpha_vantage"
-                    return fundamentals
-                except Exception as exc:
-                    logger.error(f"Alpha Vantage fundamentals fallback failed for {ticker}: {exc}")
+            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+            if "error" not in sec_snapshot:
+                return sec_snapshot
+            alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
+            if "error" not in alpha_snapshot:
+                return alpha_snapshot
             return {"error": "Yahoo Finance rate limit exceeded"}
         except Exception as exc:
             logger.error(f"Failed to fetch fundamentals for {ticker}: {exc}")
             if not cached_inc.empty and not cached_cf.empty:
                 snapshot = self._build_snapshot(ticker, pit_context, cached_inc, cached_cf, pd.DataFrame(), "cache", current_price)
                 if "error" not in snapshot:
+                    if self._needs_enrichment(snapshot):
+                        sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+                        if "error" not in sec_snapshot:
+                            return self._merge_snapshots(snapshot, sec_snapshot, "cache+sec")
                     return snapshot
-            if alpha_vantage_loader.has_api_key():
-                try:
-                    fundamentals = alpha_vantage_loader.fetch_fundamentals(ticker, pit_context, self.fallback_lag_days)
-                    fundamentals["source"] = "alpha_vantage"
-                    return fundamentals
-                except Exception as av_exc:
-                    logger.error(f"Alpha Vantage fundamentals fallback failed for {ticker}: {av_exc}")
+            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+            if "error" not in sec_snapshot:
+                return sec_snapshot
+            alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
+            if "error" not in alpha_snapshot:
+                return alpha_snapshot
             return {"error": str(exc)}
 
         if income_stmt.empty or cash_flow.empty:
+            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+            if "error" not in sec_snapshot:
+                return sec_snapshot
+            alpha_snapshot = self._try_alpha_vantage_fallback(ticker, pit_context)
+            if "error" not in alpha_snapshot:
+                return alpha_snapshot
             return {"error": "Missing fundamental data"}
 
         inc_df, cf_df, bs_df = self._prepare_statement_frames(income_stmt, cash_flow, balance_sheet)
         self._save_cached_reports(ticker, inc_df, cf_df)
-        return self._build_snapshot(ticker, pit_context, inc_df, cf_df, bs_df, "yfinance", current_price)
+        snapshot = self._build_snapshot(ticker, pit_context, inc_df, cf_df, bs_df, "yfinance", current_price)
+        if "error" not in snapshot and self._needs_enrichment(snapshot):
+            sec_snapshot = self._try_sec_fallback(ticker, pit_context, current_price)
+            if "error" not in sec_snapshot:
+                return self._merge_snapshots(snapshot, sec_snapshot, "yfinance+sec")
+        return snapshot

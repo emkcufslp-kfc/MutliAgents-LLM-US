@@ -1166,6 +1166,23 @@ def render_step2_section(screen_state: dict) -> None:
         f"WVF alert enabled: {'Yes' if technical2_config.get('enable_alert') else 'No'}"
     )
     st.dataframe(get_display_dataframe(df_results), use_container_width=True, hide_index=True)
+
+    audit_columns = [
+        "Ticker",
+        "Reason",
+        "Fundamental Source",
+        "Fundamental Pass",
+        "Fundamental Rules Passed",
+        "Fundamental Detail",
+        "Technical1 Detail",
+        "Technical2 Detail",
+    ]
+    available_audit_columns = [column for column in audit_columns if column in df_results.columns]
+    if available_audit_columns:
+        with st.expander("Step 2 Audit Detail", expanded=not survivors):
+            audit_df = df_results[available_audit_columns].copy()
+            st.dataframe(audit_df, use_container_width=True, hide_index=True)
+
     st.success(f"Qualified for further research: {len(survivors)} out of {len(screen_state['universe'])}.")
 
     if not survivors:

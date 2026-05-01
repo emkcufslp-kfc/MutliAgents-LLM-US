@@ -125,10 +125,51 @@ class HardScreener:
 
     def _evaluate_fundamental_module(self, fundamentals: Dict[str, Any]) -> Dict[str, Any]:
         config = self._fundamental_config()
+        eps_ttm_yoy = self._safe_float(fundamentals.get("eps_ttm_yoy_pct"))
+        revenue_ttm_yoy = self._safe_float(fundamentals.get("revenue_ttm_yoy_pct"))
+        roe_ttm = self._safe_float(fundamentals.get("roe_ttm_pct"))
+        free_cash_flow = self._safe_float(fundamentals.get("free_cash_flow"))
+        net_income = self._safe_float(fundamentals.get("net_income"))
+
+        if all(value is None for value in [eps_ttm_yoy, revenue_ttm_yoy, roe_ttm]):
+            detail_parts: list[str] = [
+                "Fallback fundamental check used because PIT growth metrics were unavailable from the data source."
+            ]
+            legacy_checks = [
+                ("Free Cash Flow", free_cash_flow, lambda value: value is not None and value > 0),
+                ("Net Income", net_income, lambda value: value is not None and value > 0),
+            ]
+            passed_checks: list[bool] = []
+            for label, value, predicate in legacy_checks:
+                passed = predicate(value)
+                passed_checks.append(passed)
+                value_text = f"{value:.2f}" if value is not None else "N/A"
+                detail_parts.append(f"{label}: {value_text} ({'PASS' if passed else 'FAIL'})")
+
+            market_cap_b = self._safe_float(fundamentals.get("market_cap_b"))
+            min_market_cap_b = float(config.get("min_market_cap_b", 10.0))
+            if market_cap_b is not None:
+                market_cap_ok = market_cap_b >= min_market_cap_b
+                passed_checks.append(market_cap_ok)
+                detail_parts.append(
+                    f"Market Cap (B): {market_cap_b:.2f} vs {min_market_cap_b:.2f} (>=, {'PASS' if market_cap_ok else 'FAIL'})"
+                )
+            else:
+                detail_parts.append("Market Cap (B): N/A (SKIP in fallback mode)")
+
+            passed = all(passed_checks) if passed_checks else False
+            applied = bool(config.get("apply_in_scan", True))
+            return {
+                "applied": applied,
+                "passed": passed,
+                "core_pass_count": sum(1 for item in passed_checks if item),
+                "detail": " | ".join(detail_parts),
+            }
+
         core_rules = [
-            ("EPS TTM YoY", fundamentals.get("eps_ttm_yoy_pct"), config.get("min_eps_ttm_yoy_pct", 20.0), ">="),
-            ("Revenue TTM YoY", fundamentals.get("revenue_ttm_yoy_pct"), config.get("min_revenue_ttm_yoy_pct", 20.0), ">="),
-            ("ROE TTM", fundamentals.get("roe_ttm_pct"), config.get("min_roe_ttm_pct", 15.0), ">="),
+            ("EPS TTM YoY", eps_ttm_yoy, config.get("min_eps_ttm_yoy_pct", 20.0), ">="),
+            ("Revenue TTM YoY", revenue_ttm_yoy, config.get("min_revenue_ttm_yoy_pct", 20.0), ">="),
+            ("ROE TTM", roe_ttm, config.get("min_roe_ttm_pct", 15.0), ">="),
         ]
         detail_parts: list[str] = []
         passed_core = 0
@@ -144,18 +185,19 @@ class HardScreener:
         roe_std = self._safe_float(fundamentals.get("roe_stability_std_pct"))
         roe_std_max = float(config.get("roe_stability_max_std_dev", 40.0))
         aux_checks.append(
-            ("ROE Stability", roe_std is not None and roe_std <= roe_std_max, f"{roe_std:.2f}" if roe_std is not None else "N/A")
+            ("ROE Stability", roe_std is None or roe_std <= roe_std_max, f"{roe_std:.2f}" if roe_std is not None else "N/A")
         )
         market_cap_b = self._safe_float(fundamentals.get("market_cap_b"))
         min_market_cap_b = float(config.get("min_market_cap_b", 10.0))
         aux_checks.append(
-            ("Market Cap (B)", market_cap_b is not None and market_cap_b >= min_market_cap_b, f"{market_cap_b:.2f}" if market_cap_b is not None else "N/A")
+            ("Market Cap (B)", market_cap_b is None or market_cap_b >= min_market_cap_b, f"{market_cap_b:.2f}" if market_cap_b is not None else "N/A")
         )
 
         for label, passed, value_text in aux_checks:
             threshold_text = f"{roe_std_max:.2f}" if label == "ROE Stability" else f"{min_market_cap_b:.2f}"
             comparator = "<=" if label == "ROE Stability" else ">="
-            detail_parts.append(f"{label}: {value_text} vs {threshold_text} ({comparator}, {'PASS' if passed else 'FAIL'})")
+            status = "SKIP" if value_text == "N/A" else ("PASS" if passed else "FAIL")
+            detail_parts.append(f"{label}: {value_text} vs {threshold_text} ({comparator}, {status})")
 
         min_passed = int(config.get("min_passed_fundamental_rules", 3))
         pass_count_ok = passed_core >= min_passed
