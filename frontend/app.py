@@ -17,6 +17,8 @@ from src.data.fundamental_loader import FundamentalLoader
 from src.data.macro_loader import MacroLoader
 from src.data.point_in_time import PointInTimeContext
 from src.data.price_loader import PriceLoader
+from src.data import alpha_vantage_loader
+from src.runtime_config import get_secret
 from src.screening.hard_screener import HardScreener
 
 st.set_page_config(page_title="Multi-Agent Hedge Fund", layout="wide")
@@ -370,6 +372,128 @@ def append_log(message: str) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state.app_log.insert(0, f"[{timestamp}] {message}")
     st.session_state.app_log = st.session_state.app_log[:100]
+
+
+def mask_secret(secret: str | None) -> str:
+    if not secret:
+        return "missing"
+    if len(secret) <= 6:
+        return "*" * len(secret)
+    return f"{secret[:3]}***{secret[-2:]}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def run_api_diagnostics() -> list[dict]:
+    diagnostics: list[dict] = []
+
+    xai_key = get_secret("XAI_API_KEY")
+    diagnostics.append(
+        {
+            "API": "xAI / Grok",
+            "Secret": "XAI_API_KEY",
+            "Configured": "Yes" if xai_key else "No",
+            "Status": "Configured" if xai_key else "Missing secret",
+            "Detail": f"Key preview: {mask_secret(xai_key)}. Live auth test is skipped to avoid unnecessary paid calls.",
+        }
+    )
+
+    fred_key = get_secret("FRED_API_KEY")
+    if not fred_key:
+        diagnostics.append(
+            {
+                "API": "FRED",
+                "Secret": "FRED_API_KEY",
+                "Configured": "No",
+                "Status": "Missing secret",
+                "Detail": "Macro regime will fall back to unavailable mode until the FRED key is added.",
+            }
+        )
+    else:
+        try:
+            macro_loader = MacroLoader()
+            if not macro_loader.fred:
+                raise RuntimeError("fred client did not initialize")
+            series = macro_loader.fred.get_series("UNRATE")
+            latest = float(series.iloc[-1]) if len(series) else None
+            diagnostics.append(
+                {
+                    "API": "FRED",
+                    "Secret": "FRED_API_KEY",
+                    "Configured": "Yes",
+                    "Status": "Working",
+                    "Detail": f"UNRATE test fetch succeeded. Latest value: {latest:.1f}" if latest is not None else "UNRATE test fetch returned no rows.",
+                }
+            )
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "API": "FRED",
+                    "Secret": "FRED_API_KEY",
+                    "Configured": "Yes",
+                    "Status": "Error",
+                    "Detail": str(exc),
+                }
+            )
+
+    alpha_key = get_secret("ALPHA_VANTAGE_API_KEY")
+    if not alpha_key:
+        diagnostics.append(
+            {
+                "API": "Alpha Vantage",
+                "Secret": "ALPHA_VANTAGE_API_KEY",
+                "Configured": "No",
+                "Status": "Missing secret",
+                "Detail": "Yahoo Finance rate-limit fallback is disabled until this key is added.",
+            }
+        )
+    else:
+        try:
+            payload = alpha_vantage_loader._request(
+                "TIME_SERIES_DAILY_ADJUSTED",
+                {"symbol": "SPY", "outputsize": "compact"},
+                datatype="csv",
+            )
+            header = payload.splitlines()[0] if payload else ""
+            if "timestamp" not in header.lower():
+                raise RuntimeError("unexpected Alpha Vantage CSV response")
+            diagnostics.append(
+                {
+                    "API": "Alpha Vantage",
+                    "Secret": "ALPHA_VANTAGE_API_KEY",
+                    "Configured": "Yes",
+                    "Status": "Working",
+                    "Detail": "SPY daily-price test fetch succeeded.",
+                }
+            )
+        except Exception as exc:
+            diagnostics.append(
+                {
+                    "API": "Alpha Vantage",
+                    "Secret": "ALPHA_VANTAGE_API_KEY",
+                    "Configured": "Yes",
+                    "Status": "Error",
+                    "Detail": str(exc),
+                }
+            )
+
+    return diagnostics
+
+
+def render_api_diagnostics() -> None:
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        if st.button("Refresh API Diagnostics"):
+            run_api_diagnostics.clear()
+    with c2:
+        st.caption("Checks are cached for 5 minutes to avoid unnecessary API traffic.")
+
+    diagnostics_df = pd.DataFrame(run_api_diagnostics())
+    st.dataframe(diagnostics_df, hide_index=True)
+
+    failing = diagnostics_df[~diagnostics_df["Status"].isin(["Working", "Configured"])]
+    if not failing.empty:
+        for _, row in failing.iterrows():
+            st.warning(f"{row['API']}: {row['Status']} - {row['Detail']}")
 
 
 def normalize_ticker(ticker: str) -> str:
@@ -994,6 +1118,10 @@ def render_reference_page() -> None:
 - If Yahoo or Alpha Vantage fails for a ticker, the screen marks that ticker as failed instead of crashing the entire app.
 """
     )
+
+    st.subheader("API Diagnostics")
+    st.caption("Confirms whether the current deployment has working Grok, FRED, and Alpha Vantage credentials.")
+    render_api_diagnostics()
 
     st.subheader("Runtime Log")
     if st.session_state.app_log:
